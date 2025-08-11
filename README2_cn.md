@@ -21,6 +21,9 @@
 
 2.获取设备号
 ```ba
+# 创建目录
+mkdir -p /usr/local/xt
+
 # 给工具执行权限
 chmod +x get_device_id
 
