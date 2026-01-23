@@ -50,6 +50,7 @@
 #include "hb_type.h"
 #include "hb_errno.h"
 #include "hb_comm_video.h"
+#include "hb_comm_venc.h"
 //vps end
 
 //bpu start
@@ -153,6 +154,17 @@ long g_bpu_and_push_exit_ts = 0;
 pthread_t g_bpu_and_push_tid = 0;
 
 int g_is_open_started = 0;
+int g_vencChn = 0;
+int g_vinChn = 0;
+int g_is_uvc_running = 0;
+pthread_t g_uvc_thread = 0;
+
+// UVC相关函数
+int start_uvc_stream(void);
+void *uvc_thread_func(void *arg);
+int init_venc(int width, int height);
+int deinit_venc(void);
+int yuv_to_h264(VIDEO_FRAME_S *frame, uint8_t **h264_data, int *h264_len);
 
 void stop_session(void);
 void myStopXttpCallback(void);
@@ -187,6 +199,317 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
 	}
 
 	return 0;
+}
+
+// 初始化视频编码器
+int init_venc(int width, int height)
+{
+    int ret;
+    VENC_CHN_ATTR_S stVencChnAttr;
+    VENC_ATTR_H264_S stVencAttrH264;
+    VENC_RC_ATTR_S stRcAttr;
+
+    // 初始化编码器模块
+    ret = HB_VENC_Module_Init();
+    if (ret != 0) {
+        fprintf(stderr, "[init_venc] HB_VENC_Module_Init failed, ret=%d\n", ret);
+        return -1;
+    }
+
+    // 设置编码器通道属性
+    memset(&stVencChnAttr, 0, sizeof(VENC_CHN_ATTR_S));
+    stVencChnAttr.enType = PT_H264;
+    stVencChnAttr.u32PicWidth = width;
+    stVencChnAttr.u32PicHeight = height;
+    stVencChnAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
+    stVencChnAttr.u32Profile = 66; // Baseline profile
+    stVencChnAttr.u32Level = 40;   // Level 4.0
+    stVencChnAttr.u32RefFrameNum = 1;
+    stVencChnAttr.u32MaxPicWidth = width;
+    stVencChnAttr.u32MaxPicHeight = height;
+    stVencChnAttr.bMaintainStreamOrder = HB_FALSE;
+
+    // 设置H264特定属性
+    memset(&stVencAttrH264, 0, sizeof(VENC_ATTR_H264_S));
+    stVencAttrH264.bCabacEn = HB_FALSE; // 关闭CABAC编码
+    stVencAttrH264.bWeightedPredEn = HB_FALSE;
+    stVencChnAttr.u32RefFrameNum = 1;
+
+    // 设置码率控制属性
+    memset(&stRcAttr, 0, sizeof(VENC_RC_ATTR_S));
+    stRcAttr.enRcMode = VENC_RC_MODE_CBR; // 恒定码率
+    stRcAttr.u32BitRate = 2000000; // 2Mbps
+    stRcAttr.u32Fps = 25;
+    stRcAttr.u32Gop = 50;
+
+    // 创建编码器通道
+    ret = HB_VENC_CreateChn(g_vencChn, &stVencChnAttr);
+    if (ret != 0) {
+        fprintf(stderr, "[init_venc] HB_VENC_CreateChn failed, ret=%d\n", ret);
+        return -2;
+    }
+
+    // 设置H264属性
+    ret = HB_VENC_SetChnAttrH264(g_vencChn, &stVencAttrH264);
+    if (ret != 0) {
+        fprintf(stderr, "[init_venc] HB_VENC_SetChnAttrH264 failed, ret=%d\n", ret);
+        return -3;
+    }
+
+    // 设置码率控制属性
+    ret = HB_VENC_SetRcAttr(g_vencChn, &stRcAttr);
+    if (ret != 0) {
+        fprintf(stderr, "[init_venc] HB_VENC_SetRcAttr failed, ret=%d\n", ret);
+        return -4;
+    }
+
+    // 启动编码器
+    ret = HB_VENC_StartRecvFrame(g_vencChn);
+    if (ret != 0) {
+        fprintf(stderr, "[init_venc] HB_VENC_StartRecvFrame failed, ret=%d\n", ret);
+        return -5;
+    }
+
+    return 0;
+}
+
+// 释放视频编码器资源
+int deinit_venc(void)
+{
+    int ret;
+
+    // 停止编码器
+    ret = HB_VENC_StopRecvFrame(g_vencChn);
+    if (ret != 0) {
+        fprintf(stderr, "[deinit_venc] HB_VENC_StopRecvFrame failed, ret=%d\n", ret);
+    }
+
+    // 销毁编码器通道
+    ret = HB_VENC_DestroyChn(g_vencChn);
+    if (ret != 0) {
+        fprintf(stderr, "[deinit_venc] HB_VENC_DestroyChn failed, ret=%d\n", ret);
+    }
+
+    // 反初始化编码器模块
+    ret = HB_VENC_Module_Exit();
+    if (ret != 0) {
+        fprintf(stderr, "[deinit_venc] HB_VENC_Module_Exit failed, ret=%d\n", ret);
+    }
+
+    return 0;
+}
+
+// 将YUV数据编码为H264
+int yuv_to_h264(VIDEO_FRAME_S *frame, uint8_t **h264_data, int *h264_len)
+{
+    int ret;
+    VENC_STREAM_S stStream;
+    static uint32_t pts = 0;
+
+    if (!frame || !h264_data || !h264_len) {
+        return -1;
+    }
+
+    // 设置输入帧属性
+    frame->stVFrame.u32PTS = pts++;
+    frame->stVFrame.u32Duration = 40; // 25fps
+
+    // 发送YUV帧到编码器
+    ret = HB_VENC_SendFrame(g_vencChn, frame, -1);
+    if (ret != 0) {
+        fprintf(stderr, "[yuv_to_h264] HB_VENC_SendFrame failed, ret=%d\n", ret);
+        return -2;
+    }
+
+    // 获取编码后的H264流
+    memset(&stStream, 0, sizeof(VENC_STREAM_S));
+    ret = HB_VENC_GetStream(g_vencChn, &stStream, -1);
+    if (ret != 0) {
+        fprintf(stderr, "[yuv_to_h264] HB_VENC_GetStream failed, ret=%d\n", ret);
+        return -3;
+    }
+
+    // 复制编码数据
+    if (stStream.pstPack && stStream.u32PackCount > 0) {
+        *h264_len = stStream.pstPack[0].u32Len;
+        *h264_data = (uint8_t *)malloc(*h264_len);
+        if (!*h264_data) {
+            fprintf(stderr, "[yuv_to_h264] malloc failed\n");
+            HB_VENC_ReleaseStream(g_vencChn, &stStream);
+            return -4;
+        }
+        memcpy(*h264_data, stStream.pstPack[0].pu8Addr, *h264_len);
+    }
+
+    // 释放编码器流
+    ret = HB_VENC_ReleaseStream(g_vencChn, &stStream);
+    if (ret != 0) {
+        fprintf(stderr, "[yuv_to_h264] HB_VENC_ReleaseStream failed, ret=%d\n", ret);
+        if (*h264_data) {
+            free(*h264_data);
+            *h264_data = NULL;
+        }
+        return -5;
+    }
+
+    return 0;
+}
+
+// UVC线程函数
+void *uvc_thread_func(void *arg)
+{
+    int ret;
+    VIN_DEV_ATTR_S stVinDevAttr;
+    VIN_PIPE_ATTR_S stVinPipeAttr;
+    VIN_CHN_ATTR_S stVinChnAttr;
+    VIDEO_FRAME_S stFrame;
+    uint8_t *h264_data = NULL;
+    int h264_len = 0;
+    uint32_t timestamp;
+
+    // 初始化VIN模块
+    ret = HB_VIN_Module_Init();
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_Module_Init failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    // 配置VIN设备属性（UVC设备）
+    memset(&stVinDevAttr, 0, sizeof(VIN_DEV_ATTR_S));
+    stVinDevAttr.enDevType = HB_VIN_DEV_TYPE_USB;
+    stVinDevAttr.u32BusId = 0;
+    stVinDevAttr.u32DevAddr = 0;
+    ret = HB_VIN_SetDevAttr(0, &stVinDevAttr);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_SetDevAttr failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    // 配置VIN pipe属性
+    memset(&stVinPipeAttr, 0, sizeof(VIN_PIPE_ATTR_S));
+    stVinPipeAttr.u32SrcFrameRate = 25;
+    stVinPipeAttr.u32DstFrameRate = 25;
+    stVinPipeAttr.enInputType = INPUT_TYPE_YUV422;
+    stVinPipeAttr.stSize.u32Width = g_v_width;
+    stVinPipeAttr.stSize.u32Height = g_v_height;
+    ret = HB_VIN_SetPipeAttr(0, 0, &stVinPipeAttr);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_SetPipeAttr failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    // 配置VIN通道属性
+    memset(&stVinChnAttr, 0, sizeof(VIN_CHN_ATTR_S));
+    stVinChnAttr.stSize.u32Width = g_v_width;
+    stVinChnAttr.stSize.u32Height = g_v_height;
+    stVinChnAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
+    ret = HB_VIN_SetChnAttr(0, 0, 0, &stVinChnAttr);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_SetChnAttr failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    // 启动VIN设备、pipe和通道
+    ret = HB_VIN_EnableDev(0);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_EnableDev failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    ret = HB_VIN_EnablePipe(0, 0);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_EnablePipe failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    ret = HB_VIN_EnableChn(0, 0, 0);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] HB_VIN_EnableChn failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    // 初始化视频编码器
+    ret = init_venc(g_v_width, g_v_height);
+    if (ret != 0) {
+        fprintf(stderr, "[uvc_thread_func] init_venc failed, ret=%d\n", ret);
+        goto exit;
+    }
+
+    g_is_open_started = 1;
+    // 开启视频帧解码并进行推理线程
+    ret = start_bpu_and_push();
+    fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
+
+    // 循环获取视频帧
+    while (g_is_running && !g_should_exit_main) {
+        // 获取VIN视频帧
+        ret = HB_VIN_GetChnFrame(0, 0, 0, &stFrame, -1);
+        if (ret != 0) {
+            fprintf(stderr, "[uvc_thread_func] HB_VIN_GetChnFrame failed, ret=%d\n", ret);
+            usleep(10000);
+            continue;
+        }
+
+        // 将YUV编码为H264
+        ret = yuv_to_h264(&stFrame, &h264_data, &h264_len);
+        if (ret != 0 || !h264_data || h264_len <= 0) {
+            fprintf(stderr, "[uvc_thread_func] yuv_to_h264 failed, ret=%d\n", ret);
+            HB_VIN_ReleaseChnFrame(0, 0, 0, &stFrame);
+            continue;
+        }
+
+        // 处理编码后的H264数据（与RTSP回调处理方式相同）
+        timestamp = getTimeMsec() - g_start_vts;
+        if (h264_data && h264_len > 0) {
+            memcpy(&xftp_frame_buffer[4], h264_data, h264_len);
+            // 送到解码器解码，VPS压缩，BPU进行推理
+            ret = send_stream_to_bpu(xftp_frame_buffer, h264_len + 4);
+            if (!ret) {
+                uint8_t nalu_type = h264_data[0] & 0x1F;
+                if (nalu_type == 0x01 || nalu_type == 0x05) {
+                    FRAME_INFO f_info;
+                    f_info.timestamp = timestamp;
+                    f_info.seqno = g_frame_seqno++;
+                    rt = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
+                }
+                // 将视频帧推送到流媒体服务器
+                add_xftp_frame((char *)h264_data, h264_len, 0, timestamp);
+            }
+            free(h264_data);
+            h264_data = NULL;
+        }
+
+        // 释放VIN视频帧
+        HB_VIN_ReleaseChnFrame(0, 0, 0, &stFrame);
+    }
+
+    exit:
+    // 停止编码器
+    deinit_venc();
+
+    // 停止VIN设备
+    HB_VIN_DisableChn(0, 0, 0);
+    HB_VIN_DisablePipe(0, 0);
+    HB_VIN_DisableDev(0);
+    HB_VIN_Module_Exit();
+
+    return NULL;
+}
+
+// 启动UVC视频流
+int start_uvc_stream(void)
+{
+    int ret;
+
+    // 创建UVC线程
+    ret = pthread_create(&g_uvc_thread, NULL, uvc_thread_func, NULL);
+    if (ret != 0) {
+        fprintf(stderr, "[start_uvc_stream] pthread_create failed, ret=%d\n", ret);
+        return -1;
+    }
+
+    g_is_uvc_running = 1;
+    return 0;
 }
 // 推理结果推到流媒体服务器
 int add_script_frame(const char *script_data, int script_len, int inner_type, uint32_t timestamp)
@@ -786,7 +1109,7 @@ void video_session_did_stop_cb(void)
 {
 	fprintf(stderr, "[video_session_did_stop_cb] ++++++++++++++++++++++++++++ \n");
 }
-// 启动 rtsp 拉流
+// 启动视频拉流
 int start_pull_video(void)
 {
 	int rt = 0;
@@ -798,6 +1121,13 @@ int start_pull_video(void)
 			return -1;
 		}
 		fprintf(stderr, "[start_pull_video] start_open_rtsp_thread success = %d\n", rt);
+	} else if (!strcmp(g_stream_protocol, "uvc")) {
+		rt = start_uvc_stream();
+		if (rt) {
+			fprintf(stderr, "[start_pull_video] start_uvc_stream failed. rt = %d\n", rt);
+			return -2;
+		}
+		fprintf(stderr, "[start_pull_video] start_uvc_stream success = %d\n", rt);
 	} else {
 		fprintf(stderr, "[start_pull_video] error g_stream_protocol = %s\n", g_stream_protocol);
 		return -3;
@@ -1346,6 +1676,9 @@ int read_config_xtvf(const char *channel_no)
 			fprintf(stderr, "[read_config_xtvf] stream_url error. rt = %d, url = %s\n", rt, g_stream_url);
 			return -7;
 		}
+	} else if (!strcmp(g_stream_protocol, "uvc")) {
+		// UVC协议不需要解析URL，直接使用默认配置
+		fprintf(stderr, "[read_config_xtvf] UVC protocol selected\n");
 	} else {
 		fprintf(stderr, "[read_config_xtvf] No the protocol = %s", g_stream_protocol);
 		return -9;
