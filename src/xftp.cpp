@@ -12,7 +12,9 @@
 #include <sys/stat.h>
 #include <getopt.h>
 #include <time.h>
-
+#include <fcntl.h>
+#include <sys/ioctl.h>
+//请把目前项目功能通过rtsp获取流修改成通过uvc获取视频流，目前项目里面通过rtsp获取到的视频流是h264的流，uvc获取到的流是普通yuv流，所以通过提供的链接文档，进行添加流编码，编码成h264流，别的功能不变。项目运行在这个文档描述的RDK X3的ubuntu系统中，详细请参考链接文档https://developer.d-robotics.cc/rdk_doc/Quick_start/hardware_introduction/rdk_x3
 // 条件编译处理不同平台的头文件差异
 #ifdef __linux__
 // Linux环境下使用实际API
@@ -47,100 +49,8 @@
 typedef VIDEO_STREAM_S VENC_STREAM_S;
 
 #else
-// macOS环境下的最小化定义和模拟实现 - 与RDK X3平台完全一致
-
-// 模拟Linux头文件
-#include <sys/ioctl.h>
-
-// V4L2结构体定义
-struct v4l2_format {
-    uint32_t type;
-    union {
-        struct {
-            uint32_t width;
-            uint32_t height;
-            uint32_t pixelformat;
-            uint32_t field;
-            uint32_t bytesperline;
-            uint32_t sizeimage;
-            uint32_t colorspace;
-        } pix;
-    } fmt;
-};
-
-#define V4L2_BUF_TYPE_VIDEO_CAPTURE 1
-#define V4L2_PIX_FMT_NV12 0x3231564e
-#define V4L2_FIELD_NONE 1
-#define VIDIOC_S_FMT 0xc0145602
-
-// 视频相关类型定义 - 与RDK X3平台完全一致
-typedef int32_t HB_S32;
-typedef uint32_t HB_U32;
-typedef uint8_t HB_U8;
-typedef uint64_t HB_U64;
-typedef int HB_BOOL;
-typedef void* HB_ADDR;
-typedef uint32_t PAYLOAD_TYPE_E;
-typedef uint32_t PIXEL_FORMAT_E;
-typedef uint32_t VENC_RC_MODE_E;
-typedef int VENC_CHN;
-
-#define HB_TRUE 1
-#define HB_FALSE 0
-#define HB_ERR_SUCCESS 0
-
-// 视频格式枚举 - 与RDK X3平台完全一致
-enum {
-    PT_H264 = 1  // 与RDK X3平台保持一致
-};
-
-// 像素格式枚举 - 与RDK X3平台完全一致
-enum {
-    HB_PIXEL_FORMAT_NV12 = 0
-};
-
-// 码率控制模式枚举 - 与RDK X3平台完全一致
-enum VENC_RC_MODE_E {
-    VENC_RC_MODE_CBR = 0,  // 恒定码率
-    VENC_RC_MODE_VBR = 1,  // 可变码率
-    VENC_RC_MODE_AVBR = 2, // 自适应可变码率
-    VENC_RC_MODE_FIXQP = 3 // 固定QP
-};
-
-// VIDEO_FRAME_S结构体定义 - 与RDK X3平台完全一致
-struct VIDEO_FRAME_S {
-    HB_U32 u32Width;
-    HB_U32 u32Height;
-    PIXEL_FORMAT_E enPixelFormat;
-    struct {
-        HB_U64 u32PhyAddr[2];
-        HB_U8 *pu8VirAddr[2];
-        HB_U32 u32Stride[2];
-        HB_U32 u32Length[2];
-    } stVFrame;
-};
-
-// VIDEO_FRAME_PACK_S结构体定义 - 与RDK X3平台完全一致
-struct VIDEO_FRAME_PACK_S {
-    VIDEO_FRAME_S stVFrame;
-    HB_U32 u32PTS;
-    HB_U32 u32Duration;
-};
-
-// VIDEO_STREAM_S结构体定义 - 与RDK X3平台完全一致
-struct VIDEO_STREAM_S {
-    struct {
-        HB_U8 *pu8Addr;
-        HB_U32 u32Len;
-    } pstPack[1];
-    HB_U32 u32PackCount;
-};
-
-// VENC_STREAM_S结构体定义 - 与RDK X3平台完全一致
-typedef struct {
-    struct {
-        HB_U8 *pu8Addr;
-        HB_U32 u32Len;
+// 确保类型定义一致
+typedef VIDEO_STREAM_S VENC_STREAM_S;
     } pstPack[1];
     HB_U32 u32PackCount;
 } VENC_STREAM_S;
@@ -215,17 +125,6 @@ struct FRAME_INFO {
 #endif
 
 // 全局变量定义
-int g_vencChn = 0;
-int g_v_width = 1280;
-int g_v_height = 720;
-int g_is_open_started = 0;
-int g_is_running = 1;
-int g_should_exit_main = 0;
-int g_start_vts = 0;
-int g_frame_seqno = 0;
-uint8_t xftp_frame_buffer[1024*1024];
-void *g_frame_cir_buff = NULL;
-#endif
 
 #include <algorithm>
 #include <future>
@@ -288,7 +187,7 @@ int g_msgid_cur = 0, g_is_transfer_to_mp4 = 0, g_index = 0, g_is_check_video_pul
 char g_msg_ids[MSGID_NUM][33] = {0};
 char g_channel_no[128] = {0};
 char g_stream_url[1500] = {0};
-char g_stream_protocol[16] = {0};
+char g_stream_protocol[16] = "uvc";
 char g_rtsp_play_url[1500] = {0};
 char g_rtsp_url[1200] = {0};
 char g_rtsp_user[128] = {0};
@@ -338,7 +237,6 @@ long g_bpu_and_push_exit_ts = 0;
 pthread_t g_bpu_and_push_tid = 0;
 
 int g_is_open_started = 0;
-int g_vencChn = 0;
 int g_vinChn = 0;
 int g_is_uvc_running = 0;
 pthread_t g_uvc_thread = 0;
@@ -348,7 +246,13 @@ int start_uvc_stream(void);
 void *uvc_thread_func(void *arg);
 int init_venc(int width, int height);
 int deinit_venc(void);
-int yuv_to_h264(VIDEO_FRAME_S *frame, uint8_t **h264_data, int *h264_len);
+int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *h264_len, int width, int height);
+int start_bpu_and_push(void);
+int send_stream_to_bpu(uint8_t *buffer, int len);
+
+// HB VENC (GPU) state
+static int g_venc_inited = 0;
+static VENC_CHN g_venc_chn = 0;
 
 void stop_session(void);
 void myStopXttpCallback(void);
@@ -386,204 +290,124 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
 }
 
 // 视频编码相关定义
-#ifdef __linux__
-// Linux环境下使用实际API
-#else
-// 模拟HB_VENC_SetRoiAttr函数
-int HB_VENC_SetRoiAttr(VENC_CHN VeChn, const VENC_RC_ATTR_S *pstAttr) {
-    return 0;
-}
 
-// 修复VIDEO_FRAME_S结构体成员访问
-#define stFrame .stVFrame
-#define pu8VirAddr stVFrame.pu8VirAddr
-#define u32Stride stVFrame.u32Stride
-#define u32Length stVFrame.u32Length
-#endif
-
-// 初始化视频编码器
+// 初始化视频编码器（使用 libx264 软件编码）
+// Initialize HB GPU encoder channel
 int init_venc(int width, int height)
 {
-    int ret;
-    VENC_CHN_ATTR_S stVencChnAttr;
-    VENC_ATTR_H264_S stVencAttrH264;
-    VENC_RC_ATTR_S stRcAttr;
-    VENC_RECV_PIC_PARAM_S recvParam;
+	if (g_venc_inited) return 0;
+	if (HB_VENC_Module_Init() != 0) {
+		fprintf(stderr, "[init_venc] HB_VENC_Module_Init failed\n");
+		return -1;
+	}
 
-    // 初始化编码器模块
-    ret = HB_VENC_Module_Init();
-    if (ret != 0) {
-        fprintf(stderr, "[init_venc] HB_VENC_Module_Init failed, ret=%d\n", ret);
-        return -1;
-    }
+	VENC_CHN_ATTR_S stChnAttr;
+	memset(&stChnAttr, 0, sizeof(stChnAttr));
+	stChnAttr.stVencAttr.enType = PT_H264;
+	stChnAttr.stVencAttr.u32PicWidth = width;
+	stChnAttr.stVencAttr.u32PicHeight = height;
+	stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
+	stChnAttr.stVencAttr.u32FrameBufferCount = 5;
+	stChnAttr.stVencAttr.u32BitStreamBufferCount = 5;
+	stChnAttr.stVencAttr.u32BitStreamBufSize = 10 * 1024 * 1024;
+	stChnAttr.stVencAttr.bEnableUserPts = HB_TRUE;
 
-    // 设置编码器通道属性 - 与RDK X3平台API完全一致
-    memset(&stVencChnAttr, 0, sizeof(VENC_CHN_ATTR_S));
-    stVencChnAttr.enType = PT_H264;
-    stVencChnAttr.u32Width = width;
-    stVencChnAttr.u32Height = height;
-    stVencChnAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
-    stVencChnAttr.u32Profile = 66; // Baseline profile
-    stVencChnAttr.u32Level = 40;   // Level 4.0
-    stVencChnAttr.u32RefFrameNum = 1;
-    stVencChnAttr.u32MaxWidth = width;
-    stVencChnAttr.u32MaxHeight = height;
-    stVencChnAttr.bMaintainStreamOrder = HB_FALSE;
+	stChnAttr.stRcAttr.enRcMode = VENC_RC_MODE_H264CBR;
+	stChnAttr.stRcAttr.stH264Cbr.u32BitRate = 2000; // kbps
+	stChnAttr.stRcAttr.stH264Cbr.u32FrameRate = 25;
 
-    // 创建编码器通道
-    ret = HB_VENC_CreateChn(g_vencChn, &stVencChnAttr);
-    if (ret != 0) {
-        fprintf(stderr, "[init_venc] HB_VENC_CreateChn failed, ret=%d\n", ret);
-        return -2;
-    }
+	g_venc_chn = 0;
+	int ret = HB_VENC_CreateChn(g_venc_chn, &stChnAttr);
+	if (ret != 0) {
+		fprintf(stderr, "[init_venc] HB_VENC_CreateChn failed ret=%d\n", ret);
+		HB_VENC_Module_Uninit();
+		return -2;
+	}
 
-    // 设置H264属性 - 与RDK X3平台API完全一致
-    memset(&stVencAttrH264, 0, sizeof(VENC_ATTR_H264_S));
-    stVencAttrH264.bEnableCabac = HB_FALSE; // 关闭CABAC编码
-    stVencAttrH264.bEnableWeightedPred = HB_FALSE;
-    stVencAttrH264.u32SpsPpsInterval = 1;
-    stVencAttrH264.bEnableAud = HB_FALSE;
-    
-    // 使用正确的H264属性设置API
-    ret = HB_VENC_SetChnAttr(g_vencChn, (VENC_ATTR_S *)&stVencAttrH264);
-    if (ret != 0) {
-        fprintf(stderr, "[init_venc] HB_VENC_SetChnAttr failed, ret=%d\n", ret);
-        return -3;
-    }
+	VENC_RECV_PIC_PARAM_S recvParam;
+	recvParam.s32RecvPicNum = -1; // receive indefinitely
+	ret = HB_VENC_StartRecvFrame(g_venc_chn, &recvParam);
+	if (ret != 0) {
+		fprintf(stderr, "[init_venc] HB_VENC_StartRecvFrame failed ret=%d\n", ret);
+		HB_VENC_DestroyChn(g_venc_chn);
+		HB_VENC_Module_Uninit();
+		return -3;
+	}
 
-    // 设置码率控制属性 - 与RDK X3平台API完全一致
-    memset(&stRcAttr, 0, sizeof(VENC_RC_ATTR_S));
-    stRcAttr.enRcMode = 0; // VENC_RC_MODE_CBR - 恒定码率
-    stRcAttr.u32BitRate = 2000000; // 2Mbps
-    stRcAttr.u32Fps = 25;
-    stRcAttr.u32Gop = 50;
-    stRcAttr.u32SrcFrameRate = 25;
-    stRcAttr.u32MinQP = 10;
-    stRcAttr.u32MaxQP = 40;
-    
-    // 使用正确的码率控制设置API
-    ret = HB_VENC_SetRoiAttr(g_vencChn, &stRcAttr);
-    if (ret != 0) {
-        fprintf(stderr, "[init_venc] HB_VENC_SetRoiAttr failed, ret=%d\n", ret);
-        return -4;
-    }
-
-    // 启动编码器，设置接收参数
-    memset(&recvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
-    recvParam.bEnable = HB_TRUE;
-    ret = HB_VENC_StartRecvFrame(g_vencChn, &recvParam);
-    if (ret != 0) {
-        fprintf(stderr, "[init_venc] HB_VENC_StartRecvFrame failed, ret=%d\n", ret);
-        return -5;
-    }
-
-    return 0;
+	g_venc_inited = 1;
+	return 0;
 }
 
-// 释放视频编码器资源
 int deinit_venc(void)
 {
-    int ret;
-
-    // 停止编码器
-    ret = HB_VENC_StopRecvFrame(g_vencChn, NULL);
-    if (ret != 0) {
-        fprintf(stderr, "[deinit_venc] HB_VENC_StopRecvFrame failed, ret=%d\n", ret);
-    }
-
-    // 销毁编码器通道
-    ret = HB_VENC_DestroyChn(g_vencChn);
-    if (ret != 0) {
-        fprintf(stderr, "[deinit_venc] HB_VENC_DestroyChn failed, ret=%d\n", ret);
-    }
-
-    // 退出编码器模块
-    ret = HB_VENC_Module_Init(); // 使用Init替代Exit，因为Exit函数不存在
-    if (ret != 0) {
-        fprintf(stderr, "[deinit_venc] HB_VENC_Module_Init failed, ret=%d\n", ret);
-    }
-
-    return 0;
+	if (!g_venc_inited) return 0;
+	HB_VENC_StopRecvFrame(g_venc_chn);
+	HB_VENC_DestroyChn(g_venc_chn);
+	HB_VENC_Module_Uninit();
+	g_venc_inited = 0;
+	return 0;
 }
 
-// 将YUV数据编码为H264
-int yuv_to_h264(VIDEO_FRAME_S *frame, uint8_t **h264_data, int *h264_len)
+int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *h264_len, int width, int height)
 {
-    int ret;
-    static uint32_t pts = 0;
+	if (!y_ptr || !uv_ptr || !h264_data || !h264_len) return -1;
+	if (!g_venc_inited) {
+		if (init_venc(width, height) != 0) return -2;
+	}
 
-    if (!frame || !h264_data || !h264_len) {
-        return -1;
-    }
+	VIDEO_FRAME_S stFrame;
+	memset(&stFrame, 0, sizeof(stFrame));
+	stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
+	stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
+	stFrame.stVFrame.size = width * height * 3 / 2;
+	stFrame.stVFrame.width = width;
+	stFrame.stVFrame.height = height;
+	stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
+	stFrame.stVFrame.stride = width;
+	stFrame.stVFrame.vstride = height;
+	stFrame.stVFrame.pts = getTimeMsec();
+	stFrame.stVFrame.frame_end = HB_TRUE;
 
-    // 设置时间戳信息
-    frame->stFrame.u32Timestamp = pts++;
-    frame->stFrame.u32Duration = 40; // 25fps
+	int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
+	if (ret != 0) {
+		fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
+		return -3;
+	}
 
-    // 发送YUV帧到编码器
-    ret = HB_VENC_SendFrame(g_vencChn, frame, -1);
-    if (ret != 0) {
-        fprintf(stderr, "[yuv_to_h264] HB_VENC_SendFrame failed, ret=%d\n", ret);
-        return -2;
-    }
+	VIDEO_STREAM_S stStream;
+	memset(&stStream, 0, sizeof(stStream));
+	ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
+	if (ret != 0) {
+		fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
+		return -4;
+	}
 
-    // 获取编码后的H264流
-    VIDEO_STREAM_S stStream;
-    memset(&stStream, 0, sizeof(VIDEO_STREAM_S));
-    ret = HB_VENC_GetStream(g_vencChn, &stStream, -1);
-    if (ret != 0) {
-        fprintf(stderr, "[yuv_to_h264] HB_VENC_GetStream failed, ret=%d\n", ret);
-        return -3;
-    }
+	uint32_t sz = stStream.pstPack.size;
+	hb_char *src = stStream.pstPack.vir_ptr;
+	if (sz > 0 && src) {
+		*h264_data = (uint8_t *)malloc(sz);
+		if (!*h264_data) {
+			HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+			return -5;
+		}
+		memcpy(*h264_data, src, sz);
+		*h264_len = sz;
+	} else {
+		*h264_data = NULL;
+		*h264_len = 0;
+	}
 
-    // 复制编码数据
-    if (stStream.pstPack && stStream.u32PackCount > 0) {
-        // 计算总长度
-        *h264_len = 0;
-        for (uint32_t i = 0; i < stStream.u32PackCount; i++) {
-            *h264_len += stStream.pstPack[i].u32Len;
-        }
-        
-        // 分配内存
-        *h264_data = (uint8_t *)malloc(*h264_len);
-        if (!*h264_data) {
-            fprintf(stderr, "[yuv_to_h264] malloc failed\n");
-            HB_VENC_ReleaseStream(g_vencChn, &stStream);
-            return -4;
-        }
-        
-        // 复制所有数据包
-        uint8_t *dst = *h264_data;
-        for (uint32_t i = 0; i < stStream.u32PackCount; i++) {
-            memcpy(dst, stStream.pstPack[i].pu8Addr, stStream.pstPack[i].u32Len);
-            dst += stStream.pstPack[i].u32Len;
-        }
-    } else {
-        // 没有编码数据
-        *h264_data = NULL;
-        *h264_len = 0;
-    }
-
-    // 释放编码器流
-    ret = HB_VENC_ReleaseStream(g_vencChn, &stStream);
-    if (ret != 0) {
-        fprintf(stderr, "[yuv_to_h264] HB_VENC_ReleaseStream failed, ret=%d\n", ret);
-        if (*h264_data) {
-            free(*h264_data);
-            *h264_data = NULL;
-        }
-        *h264_len = 0;
-        return -5;
-    }
-
-    return 0;
+	HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+	return 0;
 }
 
 // UVC线程函数
 void *uvc_thread_func(void *arg)
 {
-    int ret;
-    VIDEO_FRAME_S stFrame;
+	int ret;
+	int rt = 0;
+	enum v4l2_buf_type v4l2_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    
     uint8_t *h264_data = NULL;
     int h264_len = 0;
     uint32_t timestamp;
@@ -680,9 +504,8 @@ void *uvc_thread_func(void *arg)
         }
     }
     
-    // 启动流
-    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(uvc_fd, VIDIOC_STREAMON, &type) < 0) {
+	// 启动流
+	if (ioctl(uvc_fd, VIDIOC_STREAMON, &v4l2_type) < 0) {
         fprintf(stderr, "[uvc_thread_func] Failed to start stream: %s\n", strerror(errno));
         goto exit;
     }
@@ -747,34 +570,12 @@ void *uvc_thread_func(void *arg)
 
         timestamp = getTimeMsec();
 
-        // 设置视频帧信息
-        memset(&stFrame, 0, sizeof(VIDEO_FRAME_S));
-        stFrame.u32Width = g_v_width;
-        stFrame.u32Height = g_v_height;
-        stFrame.enPixelFormat = HB_PIXEL_FORMAT_NV12;
         
-        // 设置YUV数据指针 - 与RDK X3平台API完全一致
-        #ifdef __linux__
-        stFrame.stFrame.pu8VirAddr[0] = (uint8_t *)buffers[buf.index].start;
-        stFrame.stFrame.pu8VirAddr[1] = (uint8_t *)buffers[buf.index].start + g_v_width * g_v_height;
-        #else
-        // 在开发环境中模拟数据
-        static uint8_t *mock_data = NULL;
-        if (!mock_data) {
-            mock_data = (uint8_t *)malloc(frame_size);
-            memset(mock_data, 0, frame_size);
-        }
-        stFrame.stFrame.pu8VirAddr[0] = mock_data;
-        stFrame.stFrame.pu8VirAddr[1] = mock_data + g_v_width * g_v_height;
-        #endif
         
-        stFrame.stFrame.u32Stride[0] = g_v_width;
-        stFrame.stFrame.u32Stride[1] = g_v_width;
-        stFrame.stFrame.u32Length[0] = g_v_width * g_v_height;
-        stFrame.stFrame.u32Length[1] = g_v_width * g_v_height / 2;
-
-        // 将YUV编码为H264
-        ret = yuv_to_h264(&stFrame, &h264_data, &h264_len);
+		// 获取Y/UV平面指针（NV12）并编码为H264
+		uint8_t *y_ptr = (uint8_t *)buffers[buf.index].start;
+		uint8_t *uv_ptr = (uint8_t *)buffers[buf.index].start + g_v_width * g_v_height;
+		ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
         if (ret != 0 || !h264_data || h264_len <= 0) {
             fprintf(stderr, "[uvc_thread_func] yuv_to_h264 failed, ret=%d\n", ret);
             #ifdef __linux__
@@ -825,9 +626,8 @@ void *uvc_thread_func(void *arg)
     exit:
     // 停止流
     #ifdef __linux__
-    if (uvc_fd >= 0) {
-        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        if (ioctl(uvc_fd, VIDIOC_STREAMOFF, &type) < 0) {
+	if (uvc_fd >= 0) {
+		if (ioctl(uvc_fd, VIDIOC_STREAMOFF, &v4l2_type) < 0) {
             fprintf(stderr, "[uvc_thread_func] Failed to stop stream: %s\n", strerror(errno));
         }
     }
