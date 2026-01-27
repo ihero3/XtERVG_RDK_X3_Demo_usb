@@ -178,6 +178,7 @@ static VENC_CHN g_venc_chn = 0;
 
 void stop_session(void);
 void myStopXttpCallback(void);
+void video_session_did_stop_cb(void);
 
 #ifdef __cplusplus
 	extern "C" {
@@ -324,277 +325,359 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 }
 
 // UVC线程函数
+static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height)
+{
+	uint8_t *y = dst;
+	uint8_t *uv = dst + width * height;
+	for (int j = 0; j < height; j += 2) {
+		for (int i = 0; i < width; i += 2) {
+			int idx00 = (j * width + i) * 2;
+			int idx01 = idx00 + 2;
+			int idx10 = idx00 + width * 2;
+			int idx11 = idx10 + 2;
+
+			uint8_t y00 = src[idx00];
+			uint8_t u00 = src[idx00 + 1];
+			uint8_t y01 = src[idx01];
+			uint8_t v00 = src[idx01 + 1];
+
+			uint8_t y10 = src[idx10];
+			uint8_t u10 = src[idx10 + 1];
+			uint8_t y11 = src[idx11];
+			uint8_t v10 = src[idx11 + 1];
+
+			y[j * width + i] = y00;
+			y[j * width + i + 1] = y01;
+			y[(j + 1) * width + i] = y10;
+			y[(j + 1) * width + i + 1] = y11;
+
+			uint8_t u = (uint8_t)(((int)u00 + (int)u10) / 2);
+			uint8_t v = (uint8_t)(((int)v00 + (int)v10) / 2);
+
+			int uv_index = (j / 2) * width + i;
+			uv[uv_index] = u;
+			uv[uv_index + 1] = v;
+		}
+	}
+}
+
 void *uvc_thread_func(void *arg)
 {
 	int ret;
 	int rt = 0;
 	enum v4l2_buf_type v4l2_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    
-    uint8_t *h264_data = NULL;
-    int h264_len = 0;
-    uint32_t timestamp;
-    int uvc_fd = -1;
-    struct v4l2_format fmt;
-    int frame_size = g_v_width * g_v_height * 3 / 2; // NV12格式大小
-    
-    // 定义缓冲区结构
-    struct buffer {
-        void *start;
-        size_t length;
-    };
-    
-    struct buffer *buffers = NULL;
-    unsigned int n_buffers = 0;
 
-    // 打开UVC设备
-    uvc_fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
-    if (uvc_fd < 0) {
-        fprintf(stderr, "[uvc_thread_func] Failed to open /dev/video0: %s\n", strerror(errno));
-        goto exit;
-    }
+	uint8_t *h264_data = NULL;
+	int h264_len = 0;
+	uint32_t timestamp;
+	int uvc_fd = -1;
+	struct v4l2_format fmt;
+	int frame_size = g_v_width * g_v_height * 3 / 2; // 默认 NV12 大小
 
-    // 设置视频格式
-    memset(&fmt, 0, sizeof(fmt));
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width = g_v_width;
-    fmt.fmt.pix.height = g_v_height;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
-    fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    fmt.fmt.pix.bytesperline = g_v_width;
-    fmt.fmt.pix.sizeimage = frame_size;
-    
-    #ifdef __linux__
-    if (ioctl(uvc_fd, VIDIOC_S_FMT, &fmt) < 0) {
-        fprintf(stderr, "[uvc_thread_func] Failed to set format: %s\n", strerror(errno));
-        goto exit;
-    }
-    
-    // 请求缓冲区
-    struct v4l2_requestbuffers req;
-    memset(&req, 0, sizeof(req));
-    req.count = 4;
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    req.memory = V4L2_MEMORY_MMAP;
-    
-    if (ioctl(uvc_fd, VIDIOC_REQBUFS, &req) < 0) {
-        fprintf(stderr, "[uvc_thread_func] Failed to request buffers: %s\n", strerror(errno));
-        goto exit;
-    }
-    
-    // 分配缓冲区
-    buffers = (struct buffer *)calloc(req.count, sizeof(struct buffer));
-    if (!buffers) {
-        fprintf(stderr, "[uvc_thread_func] Out of memory\n");
-        goto exit;
-    }
-    
-    // 映射缓冲区
-    for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-        struct v4l2_buffer buf;
-        memset(&buf, 0, sizeof(buf));
-        
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = n_buffers;
-        
-        if (ioctl(uvc_fd, VIDIOC_QUERYBUF, &buf) < 0) {
-            fprintf(stderr, "[uvc_thread_func] Failed to query buffer: %s\n", strerror(errno));
-            goto exit;
-        }
-        
-        buffers[n_buffers].length = buf.length;
-        buffers[n_buffers].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, uvc_fd, buf.m.offset);
-        
-        if (MAP_FAILED == buffers[n_buffers].start) {
-            fprintf(stderr, "[uvc_thread_func] Failed to mmap buffer: %s\n", strerror(errno));
-            goto exit;
-        }
-    }
-    
-    // 将缓冲区放入队列
-    for (unsigned int i = 0; i < n_buffers; ++i) {
-        struct v4l2_buffer buf;
-        memset(&buf, 0, sizeof(buf));
-        
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = i;
-        
-        if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-            fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-            goto exit;
-        }
-    }
-    
+	// 定义缓冲区结构
+	struct buffer {
+		void *start;
+		size_t length;
+	};
+
+	struct buffer *buffers = NULL;
+	unsigned int n_buffers = 0;
+	int actual_pixfmt = V4L2_PIX_FMT_NV12;
+
+	// 本地 H264 文件
+	FILE *h264_fp = fopen("/tmp/uvc_output.h264", "wb");
+	if (!h264_fp) {
+		fprintf(stderr, "[uvc_thread_func] Failed to open output file: %s\n", strerror(errno));
+	}
+
+	// 打开UVC设备
+	uvc_fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
+	if (uvc_fd < 0) {
+		fprintf(stderr, "[uvc_thread_func] Failed to open /dev/video0: %s\n", strerror(errno));
+		goto exit;
+	}
+
+	// 设置视频格式，优先 NV12，失败则尝试 YUYV
+	memset(&fmt, 0, sizeof(fmt));
+	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	fmt.fmt.pix.width = g_v_width;
+	fmt.fmt.pix.height = g_v_height;
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+	fmt.fmt.pix.field = V4L2_FIELD_NONE;
+
+	if (ioctl(uvc_fd, VIDIOC_S_FMT, &fmt) < 0) {
+		fprintf(stderr, "[uvc_thread_func] VIDIOC_S_FMT NV12 failed: %s, try YUYV\n", strerror(errno));
+		// 尝试 YUYV
+		memset(&fmt, 0, sizeof(fmt));
+		fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		fmt.fmt.pix.width = g_v_width;
+		fmt.fmt.pix.height = g_v_height;
+		fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+		fmt.fmt.pix.field = V4L2_FIELD_NONE;
+		if (ioctl(uvc_fd, VIDIOC_S_FMT, &fmt) < 0) {
+			fprintf(stderr, "[uvc_thread_func] VIDIOC_S_FMT YUYV also failed: %s\n", strerror(errno));
+			goto exit;
+		} else {
+			actual_pixfmt = V4L2_PIX_FMT_YUYV;
+		}
+	} else {
+		actual_pixfmt = fmt.fmt.pix.pixelformat;
+	}
+
+	frame_size = fmt.fmt.pix.sizeimage;
+
+	// 请求缓冲区
+	struct v4l2_requestbuffers req;
+	memset(&req, 0, sizeof(req));
+	req.count = 4;
+	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	req.memory = V4L2_MEMORY_MMAP;
+
+	if (ioctl(uvc_fd, VIDIOC_REQBUFS, &req) < 0) {
+		fprintf(stderr, "[uvc_thread_func] Failed to request buffers: %s\n", strerror(errno));
+		goto exit;
+	}
+
+	// 分配缓冲区
+	buffers = (struct buffer *)calloc(req.count, sizeof(struct buffer));
+	if (!buffers) {
+		fprintf(stderr, "[uvc_thread_func] Out of memory\n");
+		goto exit;
+	}
+
+	// 映射缓冲区
+	for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
+		struct v4l2_buffer buf;
+		memset(&buf, 0, sizeof(buf));
+
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
+		buf.index = n_buffers;
+
+		if (ioctl(uvc_fd, VIDIOC_QUERYBUF, &buf) < 0) {
+			fprintf(stderr, "[uvc_thread_func] Failed to query buffer: %s\n", strerror(errno));
+			goto exit;
+		}
+
+		buffers[n_buffers].length = buf.length;
+		buffers[n_buffers].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, uvc_fd, buf.m.offset);
+
+		if (MAP_FAILED == buffers[n_buffers].start) {
+			fprintf(stderr, "[uvc_thread_func] Failed to mmap buffer: %s\n", strerror(errno));
+			goto exit;
+		}
+	}
+
+	// 将缓冲区放入队列
+	for (unsigned int i = 0; i < n_buffers; ++i) {
+		struct v4l2_buffer buf;
+		memset(&buf, 0, sizeof(buf));
+
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
+		buf.index = i;
+
+		if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+			fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+			goto exit;
+		}
+	}
+
 	// 启动流
 	if (ioctl(uvc_fd, VIDIOC_STREAMON, &v4l2_type) < 0) {
-        fprintf(stderr, "[uvc_thread_func] Failed to start stream: %s\n", strerror(errno));
-        goto exit;
-    }
-    #endif
+		fprintf(stderr, "[uvc_thread_func] Failed to start stream: %s\n", strerror(errno));
+		goto exit;
+	}
 
-    // 初始化视频编码器
-    ret = init_venc(g_v_width, g_v_height);
-    if (ret != 0) {
-        fprintf(stderr, "[uvc_thread_func] init_venc failed, ret=%d\n", ret);
-        goto exit;
-    }
+	// 初始化视频编码器
+	ret = init_venc(g_v_width, g_v_height);
+	if (ret != 0) {
+		fprintf(stderr, "[uvc_thread_func] init_venc failed, ret=%d\n", ret);
+		goto exit;
+	}
 
-    // 主循环
-    while (g_is_running && !g_should_exit_main) {
-        fd_set fds;
-        struct timeval tv;
-        int r;
+	// 主循环
+	while (g_is_running && !g_should_exit_main) {
+		fd_set fds;
+		struct timeval tv;
+		int r;
 
-        FD_ZERO(&fds);
-        FD_SET(uvc_fd, &fds);
+		FD_ZERO(&fds);
+		FD_SET(uvc_fd, &fds);
 
-        // 设置超时时间
-        tv.tv_sec = 2;
-        tv.tv_usec = 0;
+		// 设置超时时间
+		tv.tv_sec = 2;
+		tv.tv_usec = 0;
 
-        r = select(uvc_fd + 1, &fds, NULL, NULL, &tv);
-        if (r < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            fprintf(stderr, "[uvc_thread_func] select error: %s\n", strerror(errno));
-            break;
-        } else if (r == 0) {
-            fprintf(stderr, "[uvc_thread_func] select timeout\n");
-            continue;
-        }
+		r = select(uvc_fd + 1, &fds, NULL, NULL, &tv);
+		if (r < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			fprintf(stderr, "[uvc_thread_func] select error: %s\n", strerror(errno));
+			break;
+		} else if (r == 0) {
+			fprintf(stderr, "[uvc_thread_func] select timeout\n");
+			continue;
+		}
 
-        // 读取缓冲区
-        struct v4l2_buffer buf;
-        memset(&buf, 0, sizeof(buf));
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
+		// 读取缓冲区
+		struct v4l2_buffer buf;
+		memset(&buf, 0, sizeof(buf));
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
 
-        #ifdef __linux__
-        if (ioctl(uvc_fd, VIDIOC_DQBUF, &buf) < 0) {
-            if (errno == EAGAIN) {
-                continue;
-            }
-            fprintf(stderr, "[uvc_thread_func] Failed to dequeue buffer: %s\n", strerror(errno));
-            break;
-        }
-        #endif
+		if (ioctl(uvc_fd, VIDIOC_DQBUF, &buf) < 0) {
+			if (errno == EAGAIN) {
+				continue;
+			}
+			fprintf(stderr, "[uvc_thread_func] Failed to dequeue buffer: %s\n", strerror(errno));
+			break;
+		}
 
-        // 开启视频帧解码并进行推理线程
-        if (g_is_open_started == 0) {
-            #ifdef __linux__
-            g_is_open_started = 1;
-            ret = start_bpu_and_push();
-            fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
-            #endif
-        }
+		// 开启视频帧解码并进行推理线程
+		if (g_is_open_started == 0) {
+			g_is_open_started = 1;
+			ret = start_bpu_and_push();
+			fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
+		}
 
-        timestamp = getTimeMsec();
+		timestamp = getTimeMsec();
 
-        
-        
-		// 获取Y/UV平面指针（NV12）并编码为H264
-		uint8_t *y_ptr = (uint8_t *)buffers[buf.index].start;
-		uint8_t *uv_ptr = (uint8_t *)buffers[buf.index].start + g_v_width * g_v_height;
+		// 获取帧数据并根据实际像素格式处理
+		uint8_t *nv12_tmp = NULL;
+		uint8_t *y_ptr = NULL;
+		uint8_t *uv_ptr = NULL;
+
+		if (actual_pixfmt == V4L2_PIX_FMT_NV12) {
+			y_ptr = (uint8_t *)buffers[buf.index].start;
+			uv_ptr = y_ptr + g_v_width * g_v_height;
+		} else if (actual_pixfmt == V4L2_PIX_FMT_YUYV) {
+			// 转换为 NV12
+			nv12_tmp = (uint8_t *)malloc(g_v_width * g_v_height * 3 / 2);
+			if (!nv12_tmp) {
+				fprintf(stderr, "[uvc_thread_func] nv12_tmp malloc failed\n");
+				// 放回缓冲区
+				if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+					fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+					break;
+				}
+				continue;
+			}
+			yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
+			y_ptr = nv12_tmp;
+			uv_ptr = nv12_tmp + g_v_width * g_v_height;
+		} else {
+			fprintf(stderr, "[uvc_thread_func] Unsupported pixel format: 0x%x\n", actual_pixfmt);
+			if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+				fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+				break;
+			}
+			continue;
+		}
+
 		ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
-        if (ret != 0 || !h264_data || h264_len <= 0) {
-            fprintf(stderr, "[uvc_thread_func] yuv_to_h264 failed, ret=%d\n", ret);
-            #ifdef __linux__
-            // 放回缓冲区
-            if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-                fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-                break;
-            }
-            #endif
-            continue;
-        }
+		if (ret != 0 || !h264_data || h264_len <= 0) {
+			fprintf(stderr, "[uvc_thread_func] yuv_to_h264 failed, ret=%d\n", ret);
+			if (nv12_tmp) free(nv12_tmp);
+			// 放回缓冲区
+			if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+				fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+				break;
+			}
+			continue;
+		}
 
-        // 处理编码后的H264数据（与RTSP回调处理方式相同）
-        timestamp = 0;
-        #ifdef __linux__
-        timestamp = getTimeMsec() - g_start_vts;
-        
-        if (h264_data && h264_len > 0) {
-            memcpy(&xftp_frame_buffer[4], h264_data, h264_len);
-            // 送到解码器解码，VPS压缩，BPU进行推理
-            ret = send_stream_to_bpu(xftp_frame_buffer, h264_len + 4);
-            if (!ret) {
-                uint8_t nalu_type = h264_data[0] & 0x1F;
-                if (nalu_type == 0x01 || nalu_type == 0x05) {
-                    FRAME_INFO f_info;
-                    f_info.timestamp = timestamp;
-                    f_info.seqno = g_frame_seqno++;
-                    rt = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
-                }
-                // 将视频帧推送到流媒体服务器
-                add_xftp_frame((char *)h264_data, h264_len, 0, timestamp);
-            }
-        }
-        #endif
-        
-        free(h264_data);
-        h264_data = NULL;
+		// 处理编码后的H264数据（写入文件并推送）
+		timestamp = getTimeMsec() - g_start_vts;
+		if (h264_data && h264_len > 0) {
+			// 写入本地文件用于验证
+			if (h264_fp) {
+				fwrite(h264_data, 1, h264_len, h264_fp);
+				fflush(h264_fp);
+			}
 
-        // 放回缓冲区
-        #ifdef __linux__
-        if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-            fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-            break;
-        }
-        #endif
-    }
+			memcpy(&xftp_frame_buffer[4], h264_data, h264_len);
+			// 送到解码器解码，VPS压缩，BPU进行推理
+			ret = send_stream_to_bpu(xftp_frame_buffer, h264_len + 4);
+			if (!ret) {
+				uint8_t nalu_type = h264_data[0] & 0x1F;
+				if (nalu_type == 0x01 || nalu_type == 0x05) {
+					FRAME_INFO f_info;
+					f_info.timestamp = timestamp;
+					f_info.seqno = g_frame_seqno++;
+					rt = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
+				}
+				// 将视频帧推送到流媒体服务器
+				add_xftp_frame((char *)h264_data, h264_len, 0, timestamp);
+			}
+		}
 
-    exit:
-    // 停止流
-    #ifdef __linux__
+		free(h264_data);
+		h264_data = NULL;
+		if (nv12_tmp) { free(nv12_tmp); nv12_tmp = NULL; }
+
+		// 放回缓冲区
+		if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+			fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+			break;
+		}
+	}
+
+exit:
+	// 停止流
 	if (uvc_fd >= 0) {
 		if (ioctl(uvc_fd, VIDIOC_STREAMOFF, &v4l2_type) < 0) {
-            fprintf(stderr, "[uvc_thread_func] Failed to stop stream: %s\n", strerror(errno));
-        }
-    }
-    #endif
+			fprintf(stderr, "[uvc_thread_func] Failed to stop stream: %s\n", strerror(errno));
+		}
+	}
 
-    // 释放缓冲区
-    if (buffers) {
-        for (unsigned int i = 0; i < n_buffers; ++i) {
-            if (buffers[i].start) {
-                munmap(buffers[i].start, buffers[i].length);
-            }
-        }
-        free(buffers);
-        buffers = NULL;
-    }
+	// 释放缓冲区
+	if (buffers) {
+		for (unsigned int i = 0; i < n_buffers; ++i) {
+			if (buffers[i].start) {
+				munmap(buffers[i].start, buffers[i].length);
+			}
+		}
+		free(buffers);
+		buffers = NULL;
+	}
 
-    // 关闭设备
-    if (uvc_fd >= 0) {
-        close(uvc_fd);
-        uvc_fd = -1;
-    }
+	// 关闭设备
+	if (uvc_fd >= 0) {
+		close(uvc_fd);
+		uvc_fd = -1;
+	}
 
-    // 停止编码器
-    deinit_venc();
+	// 停止编码器
+	deinit_venc();
 
-    video_session_did_stop_cb();
+	if (h264_fp) fclose(h264_fp);
 
-    fprintf(stderr, "[uvc_thread_func] exit\n");
-    return NULL;
+	video_session_did_stop_cb();
+
+	fprintf(stderr, "[uvc_thread_func] exit\n");
+	return NULL;
 }
 
 // 启动UVC视频流
 int start_uvc_stream(void)
 {
     int ret;
+	// 预先创建/截断本地 H264 输出文件，确保文件可见
+	FILE *fp = fopen("/tmp/uvc_output.h264", "wb");
+	if (fp) fclose(fp);
 
-    // 创建UVC线程
-    ret = pthread_create(&g_uvc_thread, NULL, uvc_thread_func, NULL);
+	// 创建UVC线程
+	ret = pthread_create(&g_uvc_thread, NULL, uvc_thread_func, NULL);
     if (ret != 0) {
         fprintf(stderr, "[start_uvc_stream] pthread_create failed, ret=%d\n", ret);
         return -1;
     }
 
-    g_is_uvc_running = 1;
-    return 0;
+	g_is_uvc_running = 1;
+	fprintf(stderr, "[start_uvc_stream] uvc thread started, tid=%lu\n", (unsigned long)g_uvc_thread);
+	return 0;
 }
 // 推理结果推到流媒体服务器
 int add_script_frame(const char *script_data, int script_len, int inner_type, uint32_t timestamp)
