@@ -15,14 +15,12 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 //请把目前项目功能通过rtsp获取流修改成通过uvc获取视频流，目前项目里面通过rtsp获取到的视频流是h264的流，uvc获取到的流是普通yuv流，所以通过提供的链接文档，进行添加流编码，编码成h264流，别的功能不变。项目运行在这个文档描述的RDK X3的ubuntu系统中，详细请参考链接文档https://developer.d-robotics.cc/rdk_doc/Quick_start/hardware_introduction/rdk_x3
-// 条件编译处理不同平台的头文件差异
-#ifdef __linux__
-// Linux环境下使用实际API
+// 目标平台为 Linux（RDK X3 Ubuntu），仅保留 Linux 平台的头文件与类型
 #include <argp.h>
 #include <linux/videodev2.h>
 #include <sys/mman.h>
 
-// RDK X3平台特定头文件
+// RDK X3 平台特定头文件
 #include "hb_comm_venc.h"
 #include "hb_venc.h"
 #include "hb_vdec.h"
@@ -47,82 +45,6 @@
 
 // 确保类型定义一致
 typedef VIDEO_STREAM_S VENC_STREAM_S;
-
-#else
-// 确保类型定义一致
-typedef VIDEO_STREAM_S VENC_STREAM_S;
-    } pstPack[1];
-    HB_U32 u32PackCount;
-} VENC_STREAM_S;
-
-// VENC_CHN_ATTR_S结构体定义 - 与RDK X3平台完全一致
-typedef struct {
-    PAYLOAD_TYPE_E enType;
-    HB_U32 u32PicWidth;
-    HB_U32 u32PicHeight;
-    PIXEL_FORMAT_E enPixelFormat;
-    HB_U32 u32Profile;
-    HB_U32 u32Level;
-    HB_U32 u32RefFrameNum;
-    HB_U32 u32MaxPicWidth;
-    HB_U32 u32MaxPicHeight;
-    HB_BOOL bMaintainStreamOrder;
-} VENC_CHN_ATTR_S;
-
-// VENC_ATTR_H264_S结构体定义 - 与RDK X3平台完全一致
-typedef struct {
-    HB_BOOL bCabacEn;
-    HB_BOOL bWeightedPredEn;
-    HB_U32 u32SpsPpsInterval;
-    HB_BOOL bAudEn;
-} VENC_ATTR_H264_S;
-
-// VENC_RC_ATTR_S结构体定义 - 与RDK X3平台完全一致
-typedef struct {
-    VENC_RC_MODE_E enRcMode;
-    HB_U32 u32BitRate;
-    HB_U32 u32Fps;
-    HB_U32 u32Gop;
-    HB_U32 u32SrcFrameRate;
-    HB_U32 u32MinQP;
-    HB_U32 u32MaxQP;
-} VENC_RC_ATTR_S;
-
-// VENC_RECV_PIC_PARAM_S结构体定义 - 与RDK X3平台完全一致
-typedef struct {
-    HB_BOOL bEnable;
-} VENC_RECV_PIC_PARAM_S;
-
-// 模拟函数声明与实现 - 与RDK X3平台完全一致
-int32_t HB_VENC_Module_Init() { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_Module_Exit() { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_CreateChn(VENC_CHN chn, const VENC_CHN_ATTR_S *pstChnAttr) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_SetChnAttrH264(VENC_CHN chn, const VENC_ATTR_H264_S *pstVencAttr) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_SetRcAttr(VENC_CHN chn, const VENC_RC_ATTR_S *pstRcAttr) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_StartRecvFrame(VENC_CHN chn, const VENC_RECV_PIC_PARAM_S *pRecvParam) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_StopRecvFrame(VENC_CHN chn) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_DestroyChn(VENC_CHN chn) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_SendFrame(VENC_CHN chn, VIDEO_FRAME_S *pstVFrame, int32_t s32Timeout) { return HB_ERR_SUCCESS; }
-int32_t HB_VENC_GetStream(VENC_CHN chn, VENC_STREAM_S *pstStream, int32_t s32Timeout) { 
-    memset(pstStream, 0, sizeof(VENC_STREAM_S));
-    return HB_ERR_SUCCESS; 
-}
-int32_t HB_VENC_ReleaseStream(VENC_CHN chn, const VENC_STREAM_S *pstStream) { return HB_ERR_SUCCESS; }
-
-// 模拟其他必要的函数
-int getTimeMsec() { return 0; }
-int start_bpu_and_push() { return 0; }
-int send_stream_to_bpu(void *data, int len) { return 0; }
-int frame_cir_buff_enqueue(void *buf, void *info) { return 0; }
-void add_xftp_frame(char *data, int len, int type, int timestamp) {}
-
-// FRAME_INFO结构体定义
-struct FRAME_INFO {
-    uint32_t timestamp;
-    uint32_t seqno;
-};
-
-#endif
 
 // 全局变量定义
 
