@@ -575,6 +575,8 @@ void *uvc_thread_func(void *arg)
     // 停止编码器
     deinit_venc();
 
+    video_session_did_stop_cb();
+
     fprintf(stderr, "[uvc_thread_func] exit\n");
     return NULL;
 }
@@ -1198,13 +1200,13 @@ int start_pull_video(void)
 	int rt = 0;
 
 	if (!strcmp(g_stream_protocol, "rtsp")) {
-		rt = start_open_rtsp_thread(g_rtsp_url, g_rtsp_port, g_rtsp_user, g_rtsp_pwd, g_rtsp_server_ip, video_session_did_received_cb, video_session_did_stop_cb);
-		if (rt) {
-			fprintf(stderr, "[start_pull_video] start_open_rtsp_thread failed. rt = %d\n", rt);
-			return -1;
-		}
-		fprintf(stderr, "[start_pull_video] start_open_rtsp_thread success = %d\n", rt);
-	} else if (!strcmp(g_stream_protocol, "uvc")) {
+	// 	rt = start_open_rtsp_thread(g_rtsp_url, g_rtsp_port, g_rtsp_user, g_rtsp_pwd, g_rtsp_server_ip, video_session_did_received_cb, video_session_did_stop_cb);
+	// 	if (rt) {
+	// 		fprintf(stderr, "[start_pull_video] start_open_rtsp_thread failed. rt = %d\n", rt);
+	// 		return -1;
+	// 	}
+	// 	fprintf(stderr, "[start_pull_video] start_open_rtsp_thread success = %d\n", rt);
+	// } else if (!strcmp(g_stream_protocol, "uvc")) {
 		rt = start_uvc_stream();
 		if (rt) {
 			fprintf(stderr, "[start_pull_video] start_uvc_stream failed. rt = %d\n", rt);
@@ -1274,9 +1276,9 @@ void xftpDidStart(long uidn, long ssrc, const char *remoteFilePath, const char *
 	g_is_living = 1;
 	g_is_open_started = 0;
 	// 启动UVC流获取和编码
-	rt = start_uvc_stream();
+	rt = start_pull_video();
 	if (rt) {
-		fprintf(stderr, "[xftpDidStart] start_uvc_stream failed. rt = %d\n", rt);
+		fprintf(stderr, "[xftpDidStart] start_pull_video failed. rt = %d\n", rt);
 		return;
 	}
 	// 推送消息给观看端
