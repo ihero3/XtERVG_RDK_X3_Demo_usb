@@ -367,11 +367,11 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 
 		stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
 		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
-		stFrame.stVFrame.phy_ptr[2] = 0;
+		stFrame.stVFrame.phy_ptr[2] = g_mmz_paddr[idx] + y_plane_size + uv_plane_size;
 
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)g_mmz_vaddr[idx];
 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size);
-		stFrame.stVFrame.vir_ptr[2] = NULL;
+		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size + uv_plane_size);
 
 		stFrame.stVFrame.size = y_plane_size + uv_plane_size;
 		stFrame.stVFrame.width = width;
@@ -381,7 +381,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 		stFrame.stVFrame.stride = stride;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
-		stFrame.stVFrame.frame_end = HB_TRUE;
+		stFrame.stVFrame.frame_end = HB_FALSE;
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
@@ -420,15 +420,19 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 		// fallback: use vir pointers directly (legacy behavior)
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
+		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)uv_ptr + uv_size);
+		stFrame.stVFrame.phy_ptr[0] = 0;
+		stFrame.stVFrame.phy_ptr[1] = 0;
+		stFrame.stVFrame.phy_ptr[2] = 0;
 		stFrame.stVFrame.size = total_size;
 		stFrame.stVFrame.width = width;
 		stFrame.stVFrame.height = height;
-			// indicate NV12 pixel format for the VENC input buffer
-			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; 
+		// indicate NV12 pixel format for the VENC input buffer
+		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; 
 		stFrame.stVFrame.stride = width;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
-		stFrame.stVFrame.frame_end = HB_TRUE;
+		stFrame.stVFrame.frame_end = HB_FALSE;
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
