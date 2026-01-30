@@ -718,6 +718,8 @@ void *uvc_thread_func(void *arg)
 		if (actual_pixfmt == V4L2_PIX_FMT_NV12) {
 			y_ptr = (uint8_t *)buffers[buf.index].start;
 			uv_ptr = y_ptr + g_v_width * g_v_height;
+			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);
+
 		} else if (actual_pixfmt == V4L2_PIX_FMT_YUYV) {
 			// 转换为 NV12：优先使用地平线 hb_mm 的硬件/优化接口，若不可用则回退到软件转换
 			nv12_tmp = (uint8_t *)malloc(g_v_width * g_v_height * 3 / 2);
@@ -731,34 +733,34 @@ void *uvc_thread_func(void *arg)
 				continue;
 			}
 
-			// int conv_ret = -1;
-			// // try to resolve hb_mm_pixel_format_convert at runtime
-			// typedef int (*hb_mm_conv_t)(void *dst, int dst_fmt, const void *src, int src_fmt, int width, int height);
-			// hb_mm_conv_t hb_mm_conv = (hb_mm_conv_t)dlsym(RTLD_DEFAULT, "hb_mm_pixel_format_convert");
-			// if (hb_mm_conv) {
-			// 	conv_ret = hb_mm_conv(nv12_tmp, HB_PIXEL_FORMAT_NV12, buffers[buf.index].start, HB_PIXEL_FORMAT_YUYV422, g_v_width, g_v_height);
-			// 	if (conv_ret != 0) {
-			// 		fprintf(stderr, "[uvc_thread_func] hb_mm_pixel_format_convert failed ret=%d\n", conv_ret);
-			// 	}
-			// } else {
-			// 	// fallback: software conversion
-			// 	yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
-			// 	conv_ret = 0;
-			// }
+			int conv_ret = -1;
+			// try to resolve hb_mm_pixel_format_convert at runtime
+			typedef int (*hb_mm_conv_t)(void *dst, int dst_fmt, const void *src, int src_fmt, int width, int height);
+			hb_mm_conv_t hb_mm_conv = (hb_mm_conv_t)dlsym(RTLD_DEFAULT, "hb_mm_pixel_format_convert");
+			if (hb_mm_conv) {
+				conv_ret = hb_mm_conv(nv12_tmp, HB_PIXEL_FORMAT_NV12, buffers[buf.index].start, HB_PIXEL_FORMAT_YUYV422, g_v_width, g_v_height);
+				if (conv_ret != 0) {
+					fprintf(stderr, "[uvc_thread_func] hb_mm_pixel_format_convert failed ret=%d\n", conv_ret);
+				}
+			} else {
+				// fallback: software conversion
+				yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
+				conv_ret = 0;
+			}
 
-			// if (conv_ret != 0) {
-			// 	free(nv12_tmp);
-			// 	// 放回缓冲区
-			// 	if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-			// 		fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-			// 		break;
-			// 	}
-			// 	continue;
-			// }
+			if (conv_ret != 0) {
+				free(nv12_tmp);
+				// 放回缓冲区
+				if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+					fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+					break;
+				}
+				continue;
+			}
 
 			y_ptr = nv12_tmp;
 			uv_ptr = nv12_tmp + g_v_width * g_v_height;
-			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);	
+			// add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);	
 		} else {
 			fprintf(stderr, "[uvc_thread_func] Unsupported pixel format: 0x%x\n", actual_pixfmt);
 			if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
