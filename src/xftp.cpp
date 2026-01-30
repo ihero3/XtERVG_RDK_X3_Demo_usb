@@ -333,7 +333,8 @@ int deinit_venc(void)
 	return 0;
 }
 
-int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *h264_len, int width, int height)
+int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, 
+		int *h264_len, int width, int height)
 {
 	if (!y_ptr || !uv_ptr || !h264_data || !h264_len) return -1;
 	if (!g_venc_inited) {
@@ -385,7 +386,8 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
-			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
+			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed g_venc_chn=%d, ret=%d\n", 
+						g_venc_chn, ret);
 			return -3;
 		}
 
@@ -503,6 +505,25 @@ static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height
 			uv[uv_index + 1] = v;
 		}
 	}
+}
+
+void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height)
+{
+	static FILE *yuv_fp = NULL;
+	if (!yuv_fp) {
+		yuv_fp = fopen("/tmp/uvc_output.yuv", "wb");
+		if (!yuv_fp) {
+			fprintf(stderr, "[add_to_yuv_file] Failed to open output YUV file: %s\n", strerror(errno));
+			return;
+		}
+	}
+
+	size_t y_size = width * height;
+	size_t uv_size = width * height / 2;
+
+	fwrite(y_ptr, 1, y_size, yuv_fp);
+	fwrite(uv_ptr, 1, uv_size, yuv_fp);
+	fflush(yuv_fp);
 }
 
 void *uvc_thread_func(void *arg)
@@ -710,33 +731,34 @@ void *uvc_thread_func(void *arg)
 				continue;
 			}
 
-			int conv_ret = -1;
-			// try to resolve hb_mm_pixel_format_convert at runtime
-			typedef int (*hb_mm_conv_t)(void *dst, int dst_fmt, const void *src, int src_fmt, int width, int height);
-			hb_mm_conv_t hb_mm_conv = (hb_mm_conv_t)dlsym(RTLD_DEFAULT, "hb_mm_pixel_format_convert");
-			if (hb_mm_conv) {
-				conv_ret = hb_mm_conv(nv12_tmp, HB_PIXEL_FORMAT_NV12, buffers[buf.index].start, HB_PIXEL_FORMAT_YUYV422, g_v_width, g_v_height);
-				if (conv_ret != 0) {
-					fprintf(stderr, "[uvc_thread_func] hb_mm_pixel_format_convert failed ret=%d\n", conv_ret);
-				}
-			} else {
-				// fallback: software conversion
-				yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
-				conv_ret = 0;
-			}
+			// int conv_ret = -1;
+			// // try to resolve hb_mm_pixel_format_convert at runtime
+			// typedef int (*hb_mm_conv_t)(void *dst, int dst_fmt, const void *src, int src_fmt, int width, int height);
+			// hb_mm_conv_t hb_mm_conv = (hb_mm_conv_t)dlsym(RTLD_DEFAULT, "hb_mm_pixel_format_convert");
+			// if (hb_mm_conv) {
+			// 	conv_ret = hb_mm_conv(nv12_tmp, HB_PIXEL_FORMAT_NV12, buffers[buf.index].start, HB_PIXEL_FORMAT_YUYV422, g_v_width, g_v_height);
+			// 	if (conv_ret != 0) {
+			// 		fprintf(stderr, "[uvc_thread_func] hb_mm_pixel_format_convert failed ret=%d\n", conv_ret);
+			// 	}
+			// } else {
+			// 	// fallback: software conversion
+			// 	yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
+			// 	conv_ret = 0;
+			// }
 
-			if (conv_ret != 0) {
-				free(nv12_tmp);
-				// 放回缓冲区
-				if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-					fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-					break;
-				}
-				continue;
-			}
+			// if (conv_ret != 0) {
+			// 	free(nv12_tmp);
+			// 	// 放回缓冲区
+			// 	if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
+			// 		fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
+			// 		break;
+			// 	}
+			// 	continue;
+			// }
 
 			y_ptr = nv12_tmp;
 			uv_ptr = nv12_tmp + g_v_width * g_v_height;
+			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);	
 		} else {
 			fprintf(stderr, "[uvc_thread_func] Unsupported pixel format: 0x%x\n", actual_pixfmt);
 			if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
