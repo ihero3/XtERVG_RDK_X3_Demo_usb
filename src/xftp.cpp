@@ -143,6 +143,7 @@ int g_bufSize = 0;
 int g_mmz_index = 0;
 int g_mmz_cnt = 0;
 int g_mmz_size = 0;
+int g_mmz_stride = 0;
 char* g_mmz_vaddr[5];
 uint64_t g_mmz_paddr[5];
 
@@ -175,6 +176,8 @@ int send_stream_to_bpu(uint8_t *buffer, int len);
 // HB VENC (GPU) state
 static int g_venc_inited = 0;
 static VENC_CHN g_venc_chn = 0;
+// whether we allocated MMZ buffers for VENC
+static int g_venc_mmz_alloc = 0;
 
 void stop_session(void);
 void myStopXttpCallback(void);
@@ -214,11 +217,23 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
 
 // 视频编码相关定义
 
-// 初始化视频编码器（使用 libx264 软件编码）
+// 初始化视频编码器（使用 HB 硬件编码）
 // Initialize HB GPU encoder channel
 int init_venc(int width, int height)
 {
 	if (g_venc_inited) return 0;
+
+	// Ensure VP is initialized (some platforms require VP before VENC)
+	VP_CONFIG_S vpConf;
+	memset(&vpConf, 0, sizeof(vpConf));
+	vpConf.u32MaxPoolCnt = 32;
+	HB_VP_SetConfig(&vpConf);
+	int s32Ret = HB_VP_Init();
+	if (s32Ret != 0) {
+		fprintf(stderr, "[init_venc] HB_VP_Init failed s32Ret = %d !\n", s32Ret);
+		// continue, sometimes VP may already be inited elsewhere
+	}
+
 	if (HB_VENC_Module_Init() != 0) {
 		fprintf(stderr, "[init_venc] HB_VENC_Module_Init failed\n");
 		return -1;
@@ -229,15 +244,21 @@ int init_venc(int width, int height)
 	stChnAttr.stVencAttr.enType = PT_H264;
 	stChnAttr.stVencAttr.u32PicWidth = width;
 	stChnAttr.stVencAttr.u32PicHeight = height;
+	stChnAttr.stVencAttr.enMirrorFlip = DIRECTION_NONE;
+	stChnAttr.stVencAttr.enRotation = CODEC_ROTATION_0;
+	stChnAttr.stVencAttr.stCropCfg.bEnable = HB_FALSE;
 	stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
 	stChnAttr.stVencAttr.u32FrameBufferCount = 5;
 	stChnAttr.stVencAttr.u32BitStreamBufferCount = 5;
 	stChnAttr.stVencAttr.u32BitStreamBufSize = 10 * 1024 * 1024;
 	stChnAttr.stVencAttr.bEnableUserPts = HB_TRUE;
+	stChnAttr.stVencAttr.stAttrH264.h264_profile = (VENC_H264_PROFILE_E)0;
+	stChnAttr.stVencAttr.stAttrH264.h264_level = (HB_H264_LEVEL_E)0;
+
+	stChnAttr.stGopAttr.u32GopPresetIdx = 2;
+	stChnAttr.stGopAttr.s32DecodingRefreshType = 2;
 
 	stChnAttr.stRcAttr.enRcMode = VENC_RC_MODE_H264CBR;
-	stChnAttr.stRcAttr.stH264Cbr.u32BitRate = 2000; // kbps
-	stChnAttr.stRcAttr.stH264Cbr.u32FrameRate = 25;
 
 	g_venc_chn = 0;
 	int ret = HB_VENC_CreateChn(g_venc_chn, &stChnAttr);
@@ -247,8 +268,32 @@ int init_venc(int width, int height)
 		return -2;
 	}
 
+	// After creation, set RC params from defaults and adjust
+	VENC_RC_ATTR_S *pstRcParam = &(stChnAttr.stRcAttr);
+	s32Ret = HB_VENC_GetRcParam(g_venc_chn, pstRcParam);
+	pstRcParam->stH264Cbr.u32BitRate = 3000; // kbps
+	pstRcParam->stH264Cbr.u32FrameRate = 30;
+	pstRcParam->stH264Cbr.u32IntraPeriod = 30;
+	pstRcParam->stH264Cbr.u32VbvBufferSize = 3000;
+	HB_VENC_SetChnAttr(g_venc_chn, &stChnAttr);
+
+	// Allocate MMZ buffers for sending frames if not yet allocated (use aligned stride)
+	if (g_mmz_cnt == 0) {
+		int stride = ((width + 15) / 16) * 16; /* 16-align stride */
+		g_mmz_stride = stride;
+		g_mmz_size = stride * height * 3 / 2;
+		g_mmz_cnt = 5;
+		for (int i = 0; i < g_mmz_cnt; i++) {
+			s32Ret = HB_SYS_Alloc(&g_mmz_paddr[i], (void **)&g_mmz_vaddr[i], g_mmz_size);
+			if (s32Ret == 0) {
+				fprintf(stderr, "[init_venc] mmzAlloc paddr = 0x%lx, vaddr = %p i = %d stride=%d size=%d\n", (unsigned long)g_mmz_paddr[i], g_mmz_vaddr[i], i, stride, g_mmz_size);
+			}
+		}
+		g_venc_mmz_alloc = 1;
+	} 
+
 	VENC_RECV_PIC_PARAM_S recvParam;
-	recvParam.s32RecvPicNum = -1; // receive indefinitely
+	recvParam.s32RecvPicNum = 0; // unchangable
 	ret = HB_VENC_StartRecvFrame(g_venc_chn, &recvParam);
 	if (ret != 0) {
 		fprintf(stderr, "[init_venc] HB_VENC_StartRecvFrame failed ret=%d\n", ret);
@@ -267,6 +312,21 @@ int deinit_venc(void)
 	HB_VENC_StopRecvFrame(g_venc_chn);
 	HB_VENC_DestroyChn(g_venc_chn);
 	HB_VENC_Module_Uninit();
+
+	// free MMZ buffers if we allocated them here
+	if (g_venc_mmz_alloc && g_mmz_cnt > 0) {
+		for (int i = 0; i < g_mmz_cnt; i++) {
+			if (g_mmz_paddr[i] || g_mmz_vaddr[i]) {
+				HB_SYS_Free(g_mmz_paddr[i], g_mmz_vaddr[i]);
+				g_mmz_paddr[i] = 0;
+				g_mmz_vaddr[i] = NULL;
+			}
+		}
+		g_mmz_cnt = 0;
+		g_mmz_size = 0;
+		g_venc_mmz_alloc = 0;
+	}
+
 	g_venc_inited = 0;
 	return 0;
 }
@@ -278,50 +338,126 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 		if (init_venc(width, height) != 0) return -2;
 	}
 
+	int y_size = width * height;
+	int uv_size = width * height / 2;
+	int total_size = y_size + uv_size;
+
 	VIDEO_FRAME_S stFrame;
 	memset(&stFrame, 0, sizeof(stFrame));
-	stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
-	stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
-	stFrame.stVFrame.size = width * height * 3 / 2;
-	stFrame.stVFrame.width = width;
-	stFrame.stVFrame.height = height;
-	stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
-	stFrame.stVFrame.stride = width;
-	stFrame.stVFrame.vstride = height;
-	stFrame.stVFrame.pts = getTimeMsec();
-	stFrame.stVFrame.frame_end = HB_TRUE;
 
-	int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
-	if (ret != 0) {
-		fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
-		return -3;
-	}
-
-	VIDEO_STREAM_S stStream;
-	memset(&stStream, 0, sizeof(stStream));
-	ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
-	if (ret != 0) {
-		fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
-		return -4;
-	}
-
-	uint32_t sz = stStream.pstPack.size;
-	hb_char *src = stStream.pstPack.vir_ptr;
-	if (sz > 0 && src) {
-		*h264_data = (uint8_t *)malloc(sz);
-		if (!*h264_data) {
-			HB_VENC_ReleaseStream(g_venc_chn, &stStream);
-			return -5;
+	// Use allocated MMZ buffer if available
+	int idx = g_mmz_index % g_mmz_cnt;
+	if (g_mmz_cnt > 0 && g_mmz_vaddr[idx] != NULL && g_mmz_paddr[idx] != 0) {
+		/* Use aligned stride and copy per-line to MMZ */
+		int stride = g_mmz_stride ? g_mmz_stride : (((width + 15) / 16) * 16);
+		int y_plane_size = stride * height;
+		int uv_plane_size = stride * (height / 2);
+		uint8_t *dst = (uint8_t *)g_mmz_vaddr[idx];
+		/* copy Y plane line by line */
+		for (int r = 0; r < height; r++) {
+			memcpy(dst + r * stride, y_ptr + r * width, width);
 		}
-		memcpy(*h264_data, src, sz);
-		*h264_len = sz;
-	} else {
-		*h264_data = NULL;
-		*h264_len = 0;
-	}
+		/* copy UV plane line by line */
+		uint8_t *dst_uv = dst + y_plane_size;
+		for (int r = 0; r < height / 2; r++) {
+			memcpy(dst_uv + r * stride, uv_ptr + r * width, width);
+		}
 
-	HB_VENC_ReleaseStream(g_venc_chn, &stStream);
-	return 0;
+		stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
+		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
+		stFrame.stVFrame.phy_ptr[2] = 0;
+
+		stFrame.stVFrame.vir_ptr[0] = (hb_char *)g_mmz_vaddr[idx];
+		stFrame.stVFrame.vir_ptr[1] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size);
+		stFrame.stVFrame.vir_ptr[2] = NULL;
+
+		stFrame.stVFrame.size = y_plane_size + uv_plane_size;
+		stFrame.stVFrame.width = width;
+		stFrame.stVFrame.height = height;
+		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
+		stFrame.stVFrame.stride = stride;
+		stFrame.stVFrame.vstride = height;
+		stFrame.stVFrame.pts = getTimeMsec();
+		stFrame.stVFrame.frame_end = HB_TRUE;
+
+		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
+		if (ret != 0) {
+			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
+			return -3;
+		}
+
+		g_mmz_index = (g_mmz_index + 1) % g_mmz_cnt;
+
+		VIDEO_STREAM_S stStream;
+		memset(&stStream, 0, sizeof(stStream));
+		ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
+		if (ret != 0) {
+			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
+			return -4;
+		}
+
+		uint32_t sz = stStream.pstPack.size;
+		hb_char *src = stStream.pstPack.vir_ptr;
+		if (sz > 0 && src) {
+			*h264_data = (uint8_t *)malloc(sz);
+			if (!*h264_data) {
+				HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+				return -5;
+			}
+			memcpy(*h264_data, src, sz);
+			*h264_len = sz;
+		} else {
+			*h264_data = NULL;
+			*h264_len = 0;
+		}
+
+		HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+		return 0;
+	} else {
+		// fallback: use vir pointers directly (legacy behavior)
+		stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
+		stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
+		stFrame.stVFrame.size = total_size;
+		stFrame.stVFrame.width = width;
+		stFrame.stVFrame.height = height;
+		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
+		stFrame.stVFrame.stride = width;
+		stFrame.stVFrame.vstride = height;
+		stFrame.stVFrame.pts = getTimeMsec();
+		stFrame.stVFrame.frame_end = HB_TRUE;
+
+		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
+		if (ret != 0) {
+			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
+			return -3;
+		}
+
+		VIDEO_STREAM_S stStream;
+		memset(&stStream, 0, sizeof(stStream));
+		ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
+		if (ret != 0) {
+			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
+			return -4;
+		}
+
+		uint32_t sz = stStream.pstPack.size;
+		hb_char *src = stStream.pstPack.vir_ptr;
+		if (sz > 0 && src) {
+			*h264_data = (uint8_t *)malloc(sz);
+			if (!*h264_data) {
+				HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+				return -5;
+			}
+			memcpy(*h264_data, src, sz);
+			*h264_len = sz;
+		} else {
+			*h264_data = NULL;
+			*h264_len = 0;
+		}
+
+		HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+		return 0;
+	}
 }
 
 // UVC线程函数
@@ -385,13 +521,14 @@ void *uvc_thread_func(void *arg)
 	int actual_pixfmt = V4L2_PIX_FMT_NV12;
 
 	// 本地 H264 文件
-	FILE *h264_fp = fopen("/tmp/uvc_output.h264", "wb");
-	if (!h264_fp) {
-		fprintf(stderr, "[uvc_thread_func] Failed to open output file: %s\n", strerror(errno));
-	}
+	// FILE *h264_fp = fopen("/tmp/uvc_output.h264", "wb");
+	// if (!h264_fp) {
+	// 	fprintf(stderr, "[uvc_thread_func] Failed to open output file: %s\n", strerror(errno));
+	// }
 
+	FILE *h264_fp = NULL;
 	// 打开UVC设备
-	uvc_fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
+	uvc_fd = open("/dev/video8", O_RDWR | O_NONBLOCK);
 	if (uvc_fd < 0) {
 		fprintf(stderr, "[uvc_thread_func] Failed to open /dev/video0: %s\n", strerror(errno));
 		goto exit;
@@ -665,9 +802,9 @@ int start_uvc_stream(void)
 {
     int ret;
 	// 预先创建/截断本地 H264 输出文件，确保文件可见
-	FILE *fp = fopen("/tmp/uvc_output.h264", "wb");
-	if (fp) fclose(fp);
-
+	// FILE *fp = fopen("/tmp/uvc_output.h264", "wb");
+	// if (fp) fclose(fp);
+	FILE *fp = NULL;
 	// 创建UVC线程
 	ret = pthread_create(&g_uvc_thread, NULL, uvc_thread_func, NULL);
     if (ret != 0) {
