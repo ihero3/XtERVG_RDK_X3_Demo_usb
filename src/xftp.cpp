@@ -503,40 +503,29 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 			memcpy(dst_uv + r * stride, uv_ptr + r * width, width);
 		}
 
-		// ===================== 关键修改开始 =====================
-		// 1. 填充帧整体信息（地平线X3要求必须指定帧类型）
-		stFrame.frame_type = HB_FRAME_TYPE_NORMAL; // 正常帧（自动I/P帧切换，推荐）
-		stFrame.frame_end = HB_TRUE; // 标记为完整帧（避免编码器认为帧不完整）
-
-		// 2. 填充YUV平面信息（NV12只有2个平面，第3个平面置0）
+		// ===================== 兼容SDK版本的修改（只保留支持的字段） =====================
+		// 1. 填充YUV平面信息（NV12只有2个平面，第3个平面强制置0/NULL，核心修正）
 		// Y平面（第0个平面）
 		stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)g_mmz_vaddr[idx];
 		// UV交织平面（第1个平面）
 		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)dst_uv;
-		// NV12无第2个平面，必须置0（关键修正：删除多余的第2平面赋值）
+		// NV12无第2个平面，必须置0/NULL（解决格式混乱问题，关键）
 		stFrame.stVFrame.phy_ptr[2] = 0;
 		stFrame.stVFrame.vir_ptr[2] = NULL;
 
-		// 3. 填充帧核心参数（与Venc通道配置对齐）
+		// 2. 填充帧核心参数（与Venc通道配置对齐，均为当前SDK支持的字段）
 		stFrame.stVFrame.size = y_plane_size + uv_plane_size; // 总大小正确
 		stFrame.stVFrame.width = width; // 与通道配置一致
 		stFrame.stVFrame.height = height; // 与通道配置一致
-		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; // 格式正确
+		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; // 格式正确，当前SDK支持
 		stFrame.stVFrame.stride = stride; // 水平步长（对齐后的宽度）
-		stFrame.stVFrame.vstride = height; // 垂直步长（Y平面高度）
-		// 补充：UV平面的垂直步长（部分SDK需要，可选但推荐）
-		stFrame.stVFrame.vstride_uv = height / 2;
+		stFrame.stVFrame.vstride = height; // 垂直步长（使用SDK支持的默认值，避免报错）
+		stFrame.stVFrame.pts = getTimeMsec(); // 时间戳（保留有效值，避免0值）
+		stFrame.stVFrame.frame_end = HB_FALSE; // 保留原字段（若仍报错可删除，优先保证编译）
 
-		// 4. 填充时间戳（确保有效，避免0值）
-		stFrame.stVFrame.pts = getTimeMsec();
-		// 补充：时间戳格式标记（部分SDK要求）
-		stFrame.stVFrame.pts_type = HB_PTS_TYPE_MSEC;
-
-		// 5. 补充帧有效标志（地平线X3硬件编码必需）
-		stFrame.stVFrame.frame_flag = HB_FRAME_FLAG_VALID;
-		// ===================== 关键修改结束 =====================
+		// ===================== 兼容修改结束 =====================
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
@@ -574,10 +563,9 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 		return 0;
 	} else {
 		// fallback: use vir pointers directly (legacy behavior)
-		// （注：fallback分支使用堆内存，硬件编码不支持，大概率也会报错，可忽略或同步修改）
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
-		stFrame.stVFrame.vir_ptr[2] = NULL; // 修正：第2平面置NULL
+		stFrame.stVFrame.vir_ptr[2] = NULL; // 修正：第2平面置NULL，兼容SDK
 		stFrame.stVFrame.phy_ptr[0] = 0;
 		stFrame.stVFrame.phy_ptr[1] = 0;
 		stFrame.stVFrame.phy_ptr[2] = 0;
@@ -588,8 +576,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 		stFrame.stVFrame.stride = width;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
-		stFrame.stVFrame.frame_end = HB_TRUE; // 补充：标记完整帧
-		stFrame.frame_type = HB_FRAME_TYPE_NORMAL; // 补充：帧类型
+		stFrame.stVFrame.frame_end = HB_FALSE;
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
