@@ -248,8 +248,8 @@ int init_venc(int width, int height)
 	stChnAttr.stVencAttr.enMirrorFlip = DIRECTION_NONE;
 	stChnAttr.stVencAttr.enRotation = CODEC_ROTATION_0;
 	stChnAttr.stVencAttr.stCropCfg.bEnable = HB_FALSE;
-	// stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;//
-	stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_YUYV422;
+	// Use NV12 input for VENC (supported values per HB VENC spec)
+	stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
 	stChnAttr.stVencAttr.u32FrameBufferCount = 5;
 	stChnAttr.stVencAttr.u32BitStreamBufferCount = 5;
 	stChnAttr.stVencAttr.u32BitStreamBufSize = 10 * 1024 * 1024;
@@ -376,8 +376,8 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 		stFrame.stVFrame.size = y_plane_size + uv_plane_size;
 		stFrame.stVFrame.width = width;
 		stFrame.stVFrame.height = height;
-		// stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;//HB_PIXEL_FORMAT_YUYV422
-		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_YUYV422;//
+			// indicate NV12 pixel format for the VENC input buffer
+			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
 		stFrame.stVFrame.stride = stride;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
@@ -423,8 +423,8 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *
 		stFrame.stVFrame.size = total_size;
 		stFrame.stVFrame.width = width;
 		stFrame.stVFrame.height = height;
-		// stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; //HB_PIXEL_FORMAT_YUYV422
-		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_YUYV422; 
+			// indicate NV12 pixel format for the VENC input buffer
+			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; 
 		stFrame.stVFrame.stride = width;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
@@ -1184,9 +1184,8 @@ int sample_vdec_ChnAttr_init(VDEC_CHN_ATTR_S *pVdecChnAttr, PAYLOAD_TYPE_E enTyp
 	// 设置解码模式为帧模式
 	pVdecChnAttr->enMode = VIDEO_MODE_FRAME;
 	// 设置像素格式 NV12格式
-	// pVdecChnAttr->enPixelFormat = HB_PIXEL_FORMAT_NV12;
-	//HB_PIXEL_FORMAT_YUYV422
-	pVdecChnAttr->enPixelFormat = HB_PIXEL_FORMAT_YUYV422;
+	// Use NV12 as decoder output pixel format
+	pVdecChnAttr->enPixelFormat = HB_PIXEL_FORMAT_NV12;
 	// 输入buffer个数
 	pVdecChnAttr->u32FrameBufCnt = 3;
 	// 输出buffer个数
