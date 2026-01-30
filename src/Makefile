@@ -16,7 +16,7 @@ LIB_PATH := ../libs /usr/local/xt/lib
 LIB_PATH += /usr/lib /usr/lib/hbmedia
 LIBS := $(addprefix -L,$(LIB_PATH))
 LIBS += -lxftp_live -lxttp_rtc -lrtsp_utils -lcurl -lcjson -lsqlite3 -pthread -lm -lstdc++
-LIBS += -lspcdev -lhbmem -lion -lhbmedia -lvio
+LIBS += -lspcdev -lhbmem -lion -lhbmedia -lvio -ldl
 
 # try to link libhb_venc if available (RDK X3 device). If not found, skip it.
 HBVENC_PATH1 := /usr/lib/libhb_venc.so
