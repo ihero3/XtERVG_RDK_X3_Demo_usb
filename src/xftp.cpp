@@ -378,7 +378,8 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 		stFrame.stVFrame.width = width;
 		stFrame.stVFrame.height = height;
 			// indicate NV12 pixel format for the VENC input buffer
-			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
+			// stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; //
+			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_YUV420SP;
 		stFrame.stVFrame.stride = stride;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
