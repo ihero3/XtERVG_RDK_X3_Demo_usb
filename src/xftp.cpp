@@ -145,7 +145,7 @@ int g_mmz_index = 0;
 int g_mmz_cnt = 0;
 int g_mmz_size = 0;
 int g_mmz_stride = 0;
-char* g_mmz_vaddr[5];
+char* g_mmz_vaddr[5] = {NULL};
 uint64_t g_mmz_paddr[5];
 
 int g_vdecChn = 0;
@@ -192,6 +192,48 @@ int ion_alloc_phy(int size, int *fd, char **vaddr, uint64_t * paddr);
 	}
 #endif
 
+// 初始化Venc专用MMZ内存缓冲区（在init_venc之前调用）
+int init_venc_mmz(int width, int height) {
+    // 1. 计算NV12格式的缓冲区大小（满足16字节对齐）
+    g_mmz_stride = ((width + 15) / 16) * 16; // 水平步长16字节对齐
+    int y_plane_size = g_mmz_stride * height;
+    int uv_plane_size = g_mmz_stride * (height / 2);
+    int total_buf_size = y_plane_size + uv_plane_size; // 单缓冲区总大小
+
+    // 2. 循环分配5个环形缓冲区（Venc要求至少3个，避免缓冲区阻塞）
+    for (int i = 0; i < g_mmz_cnt; i++) {
+        // 地平线X3 MMZ分配API（关键：指定视频专用内存池和属性）
+        g_mmz_vaddr[i] = hb_mmz_alloc(
+            "venc_buf", // 缓冲区名称，自定义
+            total_buf_size, // 缓冲区大小
+            &g_mmz_paddr[i], // 输出物理地址
+            64, // 对齐要求：64字节对齐（Venc强制要求）
+            "mmz_video" // 内存池名称：视频专用MMZ池（不可修改为其他池）
+        );
+
+        // 3. 验证分配结果
+        if (g_mmz_vaddr[i] == NULL || g_mmz_paddr[i] == 0) {
+            fprintf(stderr, "[init_venc_mmz] hb_mmz_alloc failed, i=%d\n", i);
+            // 释放已分配的缓冲区
+            for (int j = 0; j < i; j++) {
+                if (g_mmz_vaddr[j] != NULL) {
+                    hb_mmz_free(g_mmz_vaddr[j], g_mmz_paddr[j]);
+                    g_mmz_vaddr[j] = NULL;
+                    g_mmz_paddr[j] = 0;
+                }
+            }
+            return -1;
+        }
+
+        // 4. 初始化缓冲区（清零，避免脏数据）
+        memset(g_mmz_vaddr[i], 0, total_buf_size);
+        printf("[init_venc_mmz] mmz alloc success, i=%d, paddr=0x%lx, vaddr=%p, size=%d\n",
+               i, (unsigned long)g_mmz_paddr[i], g_mmz_vaddr[i], total_buf_size);
+    }
+
+    return 0;
+}
+
 // 视频流推到流媒体服务器
 int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timestamp)
 {
@@ -223,6 +265,12 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
 int init_venc(int width, int height)
 {
 	if (g_venc_inited) return 0;
+
+	    // 1. 先初始化Venc专用MMZ内存（核心修改：先分配合法缓冲区）
+    if (init_venc_mmz(width, height) != 0) {
+        fprintf(stderr, "[init_venc] init_venc_mmz failed\n");
+        return -1;
+    }
 
 	// Ensure VP is initialized (some platforms require VP before VENC)
 	VP_CONFIG_S vpConf;
@@ -280,19 +328,19 @@ int init_venc(int width, int height)
 	HB_VENC_SetChnAttr(g_venc_chn, &stChnAttr);
 
 	// Allocate MMZ buffers for sending frames if not yet allocated (use aligned stride)
-	if (g_mmz_cnt == 0) {
-		int stride = ((width + 15) / 16) * 16; /* 16-align stride */
-		g_mmz_stride = stride;
-		g_mmz_size = stride * height * 3 / 2;
-		g_mmz_cnt = 5;
-		for (int i = 0; i < g_mmz_cnt; i++) {
-			s32Ret = HB_SYS_Alloc(&g_mmz_paddr[i], (void **)&g_mmz_vaddr[i], g_mmz_size);
-			if (s32Ret == 0) {
-				fprintf(stderr, "[init_venc] mmzAlloc paddr = 0x%lx, vaddr = %p i = %d stride=%d size=%d\n", (unsigned long)g_mmz_paddr[i], g_mmz_vaddr[i], i, stride, g_mmz_size);
-			}
-		}
-		g_venc_mmz_alloc = 1;
-	} 
+	// if (g_mmz_cnt == 0) {
+	// 	int stride = ((width + 15) / 16) * 16; /* 16-align stride */
+	// 	g_mmz_stride = stride;
+	// 	g_mmz_size = stride * height * 3 / 2;
+	// 	g_mmz_cnt = 5;
+	// 	for (int i = 0; i < g_mmz_cnt; i++) {
+	// 		s32Ret = HB_SYS_Alloc(&g_mmz_paddr[i], (void **)&g_mmz_vaddr[i], g_mmz_size);
+	// 		if (s32Ret == 0) {
+	// 			fprintf(stderr, "[init_venc] mmzAlloc paddr = 0x%lx, vaddr = %p i = %d stride=%d size=%d\n", (unsigned long)g_mmz_paddr[i], g_mmz_vaddr[i], i, stride, g_mmz_size);
+	// 		}
+	// 	}
+	// 	g_venc_mmz_alloc = 1;
+	// } 
 
 	VENC_RECV_PIC_PARAM_S recvParam;
 	recvParam.s32RecvPicNum = 0; // unchangable
