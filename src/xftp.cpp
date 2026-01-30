@@ -333,6 +333,143 @@ int deinit_venc(void)
 	return 0;
 }
 
+// int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, 
+// 		int *h264_len, int width, int height)
+// {
+// 	if (!y_ptr || !uv_ptr || !h264_data || !h264_len) return -1;
+// 	if (!g_venc_inited) {
+// 		if (init_venc(width, height) != 0) return -2;
+// 	}
+
+// 	int y_size = width * height;
+// 	int uv_size = width * height / 2;
+// 	int total_size = y_size + uv_size;
+
+// 	VIDEO_FRAME_S stFrame;
+// 	memset(&stFrame, 0, sizeof(stFrame));
+
+// 	// Use allocated MMZ buffer if available
+// 	int idx = g_mmz_index % g_mmz_cnt;
+// 	if (g_mmz_cnt > 0 && g_mmz_vaddr[idx] != NULL && g_mmz_paddr[idx] != 0) {
+// 		/* Use aligned stride and copy per-line to MMZ */
+// 		int stride = g_mmz_stride ? g_mmz_stride : (((width + 15) / 16) * 16);
+// 		int y_plane_size = stride * height;
+// 		int uv_plane_size = stride * (height / 2);
+// 		uint8_t *dst = (uint8_t *)g_mmz_vaddr[idx];
+// 		/* copy Y plane line by line */
+// 		for (int r = 0; r < height; r++) {
+// 			memcpy(dst + r * stride, y_ptr + r * width, width);
+// 		}
+// 		/* copy UV plane line by line */
+// 		uint8_t *dst_uv = dst + y_plane_size;
+// 		for (int r = 0; r < height / 2; r++) {
+// 			memcpy(dst_uv + r * stride, uv_ptr + r * width, width);
+// 		}
+
+// 		stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
+// 		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
+// 		stFrame.stVFrame.phy_ptr[2] = g_mmz_paddr[idx] + y_plane_size + uv_plane_size;
+
+// 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)g_mmz_vaddr[idx];
+// 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size);
+// 		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size + uv_plane_size);
+
+// 		stFrame.stVFrame.size = y_plane_size + uv_plane_size;
+// 		stFrame.stVFrame.width = width;
+// 		stFrame.stVFrame.height = height;
+// 			// indicate NV12 pixel format for the VENC input buffer
+// 			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12;
+// 		stFrame.stVFrame.stride = stride;
+// 		stFrame.stVFrame.vstride = height;
+// 		stFrame.stVFrame.pts = getTimeMsec();
+// 		stFrame.stVFrame.frame_end = HB_FALSE;
+
+// 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
+// 		if (ret != 0) {
+// 			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed g_venc_chn=%d, ret=%d\n", 
+// 						g_venc_chn, ret);
+// 			return -3;
+// 		}
+
+// 		g_mmz_index = (g_mmz_index + 1) % g_mmz_cnt;
+
+// 		VIDEO_STREAM_S stStream;
+// 		memset(&stStream, 0, sizeof(stStream));
+// 		ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
+// 		if (ret != 0) {
+// 			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
+// 			return -4;
+// 		}
+
+// 		uint32_t sz = stStream.pstPack.size;
+// 		hb_char *src = stStream.pstPack.vir_ptr;
+// 		if (sz > 0 && src) {
+// 			*h264_data = (uint8_t *)malloc(sz);
+// 			if (!*h264_data) {
+// 				HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+// 				return -5;
+// 			}
+// 			memcpy(*h264_data, src, sz);
+// 			*h264_len = sz;
+// 		} else {
+// 			*h264_data = NULL;
+// 			*h264_len = 0;
+// 		}
+
+// 		HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+// 		return 0;
+// 	} else {
+// 		// fallback: use vir pointers directly (legacy behavior)
+// 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
+// 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
+// 		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)uv_ptr + uv_size);
+// 		stFrame.stVFrame.phy_ptr[0] = 0;
+// 		stFrame.stVFrame.phy_ptr[1] = 0;
+// 		stFrame.stVFrame.phy_ptr[2] = 0;
+// 		stFrame.stVFrame.size = total_size;
+// 		stFrame.stVFrame.width = width;
+// 		stFrame.stVFrame.height = height;
+// 		// indicate NV12 pixel format for the VENC input buffer
+// 		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; 
+// 		stFrame.stVFrame.stride = width;
+// 		stFrame.stVFrame.vstride = height;
+// 		stFrame.stVFrame.pts = getTimeMsec();
+// 		stFrame.stVFrame.frame_end = HB_FALSE;
+
+// 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
+// 		if (ret != 0) {
+// 			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_SendFrame failed ret=%d\n", ret);
+// 			return -3;
+// 		}
+
+// 		VIDEO_STREAM_S stStream;
+// 		memset(&stStream, 0, sizeof(stStream));
+// 		ret = HB_VENC_GetStream(g_venc_chn, &stStream, 2000);
+// 		if (ret != 0) {
+// 			fprintf(stderr, "[yuv_to_h264_nv12] HB_VENC_GetStream failed ret=%d\n", ret);
+// 			return -4;
+// 		}
+
+// 		uint32_t sz = stStream.pstPack.size;
+// 		hb_char *src = stStream.pstPack.vir_ptr;
+// 		if (sz > 0 && src) {
+// 			*h264_data = (uint8_t *)malloc(sz);
+// 			if (!*h264_data) {
+// 				HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+// 				return -5;
+// 			}
+// 			memcpy(*h264_data, src, sz);
+// 			*h264_len = sz;
+// 		} else {
+// 			*h264_data = NULL;
+// 			*h264_len = 0;
+// 		}
+
+// 		HB_VENC_ReleaseStream(g_venc_chn, &stStream);
+// 		return 0;
+// 	}
+// }
+
 int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, 
 		int *h264_len, int width, int height)
 {
@@ -346,7 +483,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 	int total_size = y_size + uv_size;
 
 	VIDEO_FRAME_S stFrame;
-	memset(&stFrame, 0, sizeof(stFrame));
+	memset(&stFrame, 0, sizeof(stFrame)); // 先清零，避免脏数据
 
 	// Use allocated MMZ buffer if available
 	int idx = g_mmz_index % g_mmz_cnt;
@@ -354,7 +491,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 		/* Use aligned stride and copy per-line to MMZ */
 		int stride = g_mmz_stride ? g_mmz_stride : (((width + 15) / 16) * 16);
 		int y_plane_size = stride * height;
-		int uv_plane_size = stride * (height / 2);
+		int uv_plane_size = stride * (height / 2); // NV12的UV平面高度是原图的1/2
 		uint8_t *dst = (uint8_t *)g_mmz_vaddr[idx];
 		/* copy Y plane line by line */
 		for (int r = 0; r < height; r++) {
@@ -366,24 +503,40 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 			memcpy(dst_uv + r * stride, uv_ptr + r * width, width);
 		}
 
+		// ===================== 关键修改开始 =====================
+		// 1. 填充帧整体信息（地平线X3要求必须指定帧类型）
+		stFrame.frame_type = HB_FRAME_TYPE_NORMAL; // 正常帧（自动I/P帧切换，推荐）
+		stFrame.frame_end = HB_TRUE; // 标记为完整帧（避免编码器认为帧不完整）
+
+		// 2. 填充YUV平面信息（NV12只有2个平面，第3个平面置0）
+		// Y平面（第0个平面）
 		stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
-		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
-		stFrame.stVFrame.phy_ptr[2] = g_mmz_paddr[idx] + y_plane_size + uv_plane_size;
-
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)g_mmz_vaddr[idx];
-		stFrame.stVFrame.vir_ptr[1] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size);
-		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)g_mmz_vaddr[idx] + y_plane_size + uv_plane_size);
+		// UV交织平面（第1个平面）
+		stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
+		stFrame.stVFrame.vir_ptr[1] = (hb_char *)dst_uv;
+		// NV12无第2个平面，必须置0（关键修正：删除多余的第2平面赋值）
+		stFrame.stVFrame.phy_ptr[2] = 0;
+		stFrame.stVFrame.vir_ptr[2] = NULL;
 
-		stFrame.stVFrame.size = y_plane_size + uv_plane_size;
-		stFrame.stVFrame.width = width;
-		stFrame.stVFrame.height = height;
-			// indicate NV12 pixel format for the VENC input buffer
-			// stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; //
-			stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_YUV420SP;
-		stFrame.stVFrame.stride = stride;
-		stFrame.stVFrame.vstride = height;
+		// 3. 填充帧核心参数（与Venc通道配置对齐）
+		stFrame.stVFrame.size = y_plane_size + uv_plane_size; // 总大小正确
+		stFrame.stVFrame.width = width; // 与通道配置一致
+		stFrame.stVFrame.height = height; // 与通道配置一致
+		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; // 格式正确
+		stFrame.stVFrame.stride = stride; // 水平步长（对齐后的宽度）
+		stFrame.stVFrame.vstride = height; // 垂直步长（Y平面高度）
+		// 补充：UV平面的垂直步长（部分SDK需要，可选但推荐）
+		stFrame.stVFrame.vstride_uv = height / 2;
+
+		// 4. 填充时间戳（确保有效，避免0值）
 		stFrame.stVFrame.pts = getTimeMsec();
-		stFrame.stVFrame.frame_end = HB_FALSE;
+		// 补充：时间戳格式标记（部分SDK要求）
+		stFrame.stVFrame.pts_type = HB_PTS_TYPE_MSEC;
+
+		// 5. 补充帧有效标志（地平线X3硬件编码必需）
+		stFrame.stVFrame.frame_flag = HB_FRAME_FLAG_VALID;
+		// ===================== 关键修改结束 =====================
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
@@ -421,21 +574,22 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 		return 0;
 	} else {
 		// fallback: use vir pointers directly (legacy behavior)
+		// （注：fallback分支使用堆内存，硬件编码不支持，大概率也会报错，可忽略或同步修改）
 		stFrame.stVFrame.vir_ptr[0] = (hb_char *)y_ptr;
 		stFrame.stVFrame.vir_ptr[1] = (hb_char *)uv_ptr;
-		stFrame.stVFrame.vir_ptr[2] = (hb_char *)((uint8_t *)uv_ptr + uv_size);
+		stFrame.stVFrame.vir_ptr[2] = NULL; // 修正：第2平面置NULL
 		stFrame.stVFrame.phy_ptr[0] = 0;
 		stFrame.stVFrame.phy_ptr[1] = 0;
 		stFrame.stVFrame.phy_ptr[2] = 0;
 		stFrame.stVFrame.size = total_size;
 		stFrame.stVFrame.width = width;
 		stFrame.stVFrame.height = height;
-		// indicate NV12 pixel format for the VENC input buffer
 		stFrame.stVFrame.pix_format = HB_PIXEL_FORMAT_NV12; 
 		stFrame.stVFrame.stride = width;
 		stFrame.stVFrame.vstride = height;
 		stFrame.stVFrame.pts = getTimeMsec();
-		stFrame.stVFrame.frame_end = HB_FALSE;
+		stFrame.stVFrame.frame_end = HB_TRUE; // 补充：标记完整帧
+		stFrame.frame_type = HB_FRAME_TYPE_NORMAL; // 补充：帧类型
 
 		int ret = HB_VENC_SendFrame(g_venc_chn, &stFrame, 2000);
 		if (ret != 0) {
