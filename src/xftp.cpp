@@ -649,7 +649,7 @@ static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height
 	}
 }
 
-void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height int number_of_frames)
+void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height, int number_of_frames)
 {
 	static FILE *yuv_fp = NULL;
 	if (!yuv_fp) {
