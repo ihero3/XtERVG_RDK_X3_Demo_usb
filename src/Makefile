@@ -8,28 +8,17 @@ CMP_FLAGS += -DUSE_HB
 
 XFTP = xftp
 MONITOR = monitor
-EXECS = $(XFTP) $(MONITOR)
+XFTP_USB = xftp_usb
+EXECS = $(XFTP) $(MONITOR) $(XFTP_USB) 
 XFTP_OBJS = xftp.o string_split.o sqlite.o http.o thread.o sps_parser.o frame_cir_buff.o annotation_info.o fcos_post_process.o
-MONITOR_OBJS = monitor.o config_file.o string_split.o sqlite.o http.o
+MONITOR_OBJS = monitor.o config_file.o string_split.o sqlite.o http.o 
+XFTP_USB_OBJS = yuv_to_h264.o
 
 LIB_PATH := ../libs /usr/local/xt/lib
 LIB_PATH += /usr/lib /usr/lib/hbmedia
 LIBS := $(addprefix -L,$(LIB_PATH))
 LIBS += -lxftp_live -lxttp_rtc -lrtsp_utils -lcurl -lcjson -lsqlite3 -pthread -lm -lstdc++
 LIBS += -lspcdev -lhbmem -lion -lhbmedia -lvio -ldl
-
-# try to link libhb_venc if available (RDK X3 device). If not found, skip it.
-HBVENC_PATH1 := /usr/lib/libhb_venc.so
-HBVENC_PATH2 := /usr/lib/hbmedia/libhb_venc.so
-ifeq ($(wildcard $(HBVENC_PATH1)),)
-ifeq ($(wildcard $(HBVENC_PATH2)),)
-$(warning libhb_venc not found; building without -lhb_venc. On RDK X3, run make there to link GPU encoder.)
-else
-LIBS += -L/usr/lib/hbmedia -lhb_venc
-endif
-else
-LIBS += -L/usr/lib -lhb_venc
-endif
 
 INC_PATH := ../include /usr/local/xt/include
 INC_PATH += /usr/include /usr/include/vio
@@ -39,7 +28,7 @@ INSTALL_DIR = /usr/local/xt/bin
 
 .PHONY: all clean
 
-all: $(XFTP) $(MONITOR)
+all: $(XFTP) $(MONITOR)	 $(XFTP_USB)
 
 $(XFTP): $(XFTP_OBJS)
 	$(CXX) $(EXE_FLAGS) $@ $^ $(LIBS)
@@ -47,6 +36,9 @@ $(XFTP): $(XFTP_OBJS)
 $(MONITOR): $(MONITOR_OBJS)
 	$(CXX) $(EXE_FLAGS) $@ $^ $(LIBS)
 
+$(XFTP_USB): $(XFTP_USB_OBJS)
+	$(CXX) $(EXE_FLAGS) $@ $^ $(LIBS)	
+	
 %.o: %.cpp
 	$(CXX) $(CMP_FLAGS) $(INCS) -o $@ $<
 
