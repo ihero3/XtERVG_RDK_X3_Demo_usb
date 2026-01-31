@@ -250,9 +250,16 @@ int init_venc(int width, int height)
 	stChnAttr.stVencAttr.stCropCfg.bEnable = HB_FALSE;
 	// Use NV12 input for VENC (supported values per HB VENC spec)
 	stChnAttr.stVencAttr.enPixelFormat = HB_PIXEL_FORMAT_NV12;
-	stChnAttr.stVencAttr.u32FrameBufferCount = 5;
-	stChnAttr.stVencAttr.u32BitStreamBufferCount = 5;
-	stChnAttr.stVencAttr.u32BitStreamBufSize = 10 * 1024 * 1024;
+	// Follow vendor sample: use external frame buffers and reasonable buffer counts
+	stChnAttr.stVencAttr.bExternalFreamBuffer = HB_TRUE;
+	// choose buffer counts aligned with sample code
+	stChnAttr.stVencAttr.u32FrameBufferCount = 3;
+	stChnAttr.stVencAttr.u32BitStreamBufferCount = 3;
+	// set stream buffer size based on resolution (1024 aligned) like sample
+	{
+		int streambufSize = (width * height * 3 / 2 + 1024) & ~0x3ff;
+		stChnAttr.stVencAttr.u32BitStreamBufSize = streambufSize;
+	}
 	stChnAttr.stVencAttr.bEnableUserPts = HB_TRUE;
 	stChnAttr.stVencAttr.stAttrH264.h264_profile = (VENC_H264_PROFILE_E)0;
 	stChnAttr.stVencAttr.stAttrH264.h264_level = (HB_H264_LEVEL_E)0;
