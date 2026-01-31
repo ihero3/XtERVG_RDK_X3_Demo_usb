@@ -817,7 +817,7 @@ void *uvc_thread_func(void *arg)
 			// }
 
 			// 将视频帧推送到流媒体服务器
-			add_xftp_frame((char *)h264_data, h264_len, 0, timestamp);
+			add_xftp_frame((char *)h264_data, h264_len, XTVF_VIDEO_TYPE, timestamp);
 		}
 
 		free(h264_data);
