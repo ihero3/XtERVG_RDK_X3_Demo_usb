@@ -649,11 +649,12 @@ static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height
 	}
 }
 
-void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height)
+void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height int number_of_frames)
 {
 	static FILE *yuv_fp = NULL;
 	if (!yuv_fp) {
-		yuv_fp = fopen("/tmp/uvc_output.yuv", "wb");
+		sprintf(filename, "/tmp/uvc_output_%d.yuv", number_of_frames);
+		yuv_fp = fopen(filename, "wb");
 		if (!yuv_fp) {
 			fprintf(stderr, "[add_to_yuv_file] Failed to open output YUV file: %s\n", strerror(errno));
 			return;
@@ -666,6 +667,7 @@ void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height)
 	fwrite(y_ptr, 1, y_size, yuv_fp);
 	fwrite(uv_ptr, 1, uv_size, yuv_fp);
 	fflush(yuv_fp);
+	fclose(yuv_fp);
 }
 
 void *uvc_thread_func(void *arg)
@@ -803,7 +805,7 @@ void *uvc_thread_func(void *arg)
 		fprintf(stderr, "[uvc_thread_func] init_venc failed, ret=%d\n", ret);
 		goto exit;
 	}
-
+	int frame_count = 0;
 	// 主循环
 	while (g_is_running && !g_should_exit_main) {
 		fd_set fds;
@@ -860,7 +862,7 @@ void *uvc_thread_func(void *arg)
 		if (actual_pixfmt == V4L2_PIX_FMT_NV12) {
 			y_ptr = (uint8_t *)buffers[buf.index].start;
 			uv_ptr = y_ptr + g_v_width * g_v_height;
-			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);
+			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height, frame_count++);
 
 		} else if (actual_pixfmt == V4L2_PIX_FMT_YUYV) {
 			// 转换为 NV12：优先使用地平线 hb_mm 的硬件/优化接口，若不可用则回退到软件转换
