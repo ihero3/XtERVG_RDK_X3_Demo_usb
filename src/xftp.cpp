@@ -1239,7 +1239,7 @@ void video_session_did_stop_cb(void) {
 int start_pull_video(void) {
     int rt = 0;
 
-    if (!strcmp(g_stream_protocol, "uvc")) {
+    if (!strcmp(g_stream_protocol, "rtsp")) {
         rt = start_uvc_stream();
         if (rt) {
             fprintf(stderr, "[start_pull_video] start_uvc_stream failed. rt = %d\n", rt);
