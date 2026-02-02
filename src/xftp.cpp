@@ -579,7 +579,8 @@ void *uvc_thread_func(void *arg)
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	fmt.fmt.pix.width = g_v_width;
 	fmt.fmt.pix.height = g_v_height;
-	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
 	fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
 	if (ioctl(uvc_fd, VIDIOC_S_FMT, &fmt) < 0) {
