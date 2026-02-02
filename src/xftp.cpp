@@ -556,9 +556,7 @@ void vps_small_init(int group_number)
     int ret;
 
 	// 1. 清理可能的残留资源
-    HB_VPS_DisableChn(group_number, 1);
     HB_VPS_DisableChn(group_number, 3);
-    HB_VPS_DisableChn(group_number, 5);
     HB_VPS_StopGrp(group_number);
     HB_VPS_DestroyGrp(group_number);
     usleep(100000);
@@ -595,7 +593,7 @@ void vps_small_init(int group_number)
     
 	check_vps_status(group_number);
     // 5. 设置通道属性
-    ret = HB_VPS_SetChnAttr(group_number, 1, &chn_attr);
+    ret = HB_VPS_SetChnAttr(group_number, 3, &chn_attr);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_SetChnAttr failed, ret=%d\n", ret);
         HB_VPS_DestroyGrp(group_number);
@@ -603,7 +601,7 @@ void vps_small_init(int group_number)
     }
     
     // 6. 启用通道
-    ret = HB_VPS_EnableChn(group_number, 1);
+    ret = HB_VPS_EnableChn(group_number, 3);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_EnableChn failed, ret=%d\n", ret);
         HB_VPS_DestroyGrp(group_number);
@@ -614,7 +612,7 @@ void vps_small_init(int group_number)
     ret = HB_VPS_StartGrp(group_number);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_StartGrp failed, ret=%d\n", ret);
-        HB_VPS_DisableChn(group_number, 1);
+        HB_VPS_DisableChn(group_number, 3);
         HB_VPS_DestroyGrp(group_number);
         return;
     }
@@ -1050,11 +1048,11 @@ void *uvc_thread_func(void *arg) {
         }
 
         // 开启视频帧推理线程  ihero
-        // if (g_is_open_started == 0) {
-        //     g_is_open_started = 1;
-        //     ret = start_bpu_and_push();
-        //     fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
-        // }
+        if (g_is_open_started == 0) {
+            g_is_open_started = 1;
+            ret = start_bpu_and_push();
+            fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
+        }
 
         timestamp = getTimeMsec();
         uint32_t bpu_timestamp = timestamp - g_start_vts;
@@ -1068,10 +1066,10 @@ void *uvc_thread_func(void *arg) {
             uv_ptr = y_ptr + g_v_width * g_v_height;
             
             // 1. 送入VPS进行推理处理 ihero
-            // ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
-            // if (ret != 0) {
-            //     fprintf(stderr, "[uvc_thread_func] uvc_nv12_to_vps failed, ret=%d\n", ret);
-            // }
+            ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
+            if (ret != 0) {
+                fprintf(stderr, "[uvc_thread_func] uvc_nv12_to_vps failed, ret=%d\n", ret);
+            }
             
             // 2. 编码为H264
             ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
