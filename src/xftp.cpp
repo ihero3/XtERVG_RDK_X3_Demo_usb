@@ -171,6 +171,16 @@ int g_is_udp = 0;
 int ion_alloc_phy(int size, int *fd, char **vaddr, uint64_t * paddr);
 int ion_open(void);
 
+// UVC相关函数前向声明
+int start_bpu_and_push(void);
+void video_session_did_stop_cb(void);
+
+// 会话管理函数前向声明
+void stop_session(void);
+
+// 消息回调函数前向声明
+void myStopXttpCallback(void);
+
 // ============================ 辅助函数 ============================
 // 修复函数声明冲突
 long getTimeMsec(void) {
