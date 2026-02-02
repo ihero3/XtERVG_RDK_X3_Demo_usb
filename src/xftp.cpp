@@ -173,6 +173,7 @@ int deinit_venc(void);
 int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, int *h264_len, int width, int height);
 int start_bpu_and_push(void);
 int send_stream_to_bpu(uint8_t *buffer, int len);
+int uvc_nv12_to_vps(uint8_t *y_ptr, uint8_t *uv_ptr, uint32_t timestamp, int width, int height);
 
 // HB VENC (GPU) state
 static int g_venc_inited = 0;
@@ -691,8 +692,8 @@ void *uvc_thread_func(void *arg)
 		// 开启视频帧解码并进行推理线程
 		if (g_is_open_started == 0) {
 			g_is_open_started = 1;
-			//ret = start_bpu_and_push();
-			//fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
+			ret = start_bpu_and_push();
+			fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
 		}
 
 		timestamp = getTimeMsec();
@@ -714,6 +715,14 @@ void *uvc_thread_func(void *arg)
 			continue;
 		}
 
+		// 直接将UVC的NV12数据送入VPS处理，跳过解码步骤
+		uint32_t bpu_timestamp = timestamp - g_start_vts;
+		ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
+		if (ret != 0) {
+			fprintf(stderr, "[uvc_thread_func] uvc_nv12_to_vps failed, ret=%d\n", ret);
+		}
+
+		// 将NV12数据编码为H264
 		ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
 		if (ret != 0 || !h264_data || h264_len <= 0) {
 			fprintf(stderr, "[uvc_thread_func] yuv_to_h264 failed, ret=%d\n", ret);
@@ -726,26 +735,10 @@ void *uvc_thread_func(void *arg)
 			continue;
 		}
 
-		// 处理编码后的H264数据（写入文件并推送）
-		timestamp = getTimeMsec() - g_start_vts;
+		// 处理编码后的H264数据
 		if (h264_data && h264_len > 0) {
-			
-			memcpy(&xftp_frame_buffer[4], h264_data, h264_len);
-			// 送到解码器解码，VPS压缩，BPU进行推理  ihero
-			// ret = send_stream_to_bpu(xftp_frame_buffer, h264_len + 4);
-			// if (!ret) {
-			// 	uint8_t nalu_type = h264_data[0] & 0x1F;
-			// 	if (nalu_type == 0x01 || nalu_type == 0x05) {
-			// 		FRAME_INFO f_info;
-			// 		f_info.timestamp = timestamp;
-			// 		f_info.seqno = g_frame_seqno++;
-			// 		rt = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
-			// 	}
-				
-			// }
-
 			// 将视频帧推送到流媒体服务器
-			add_xftp_frame((char *)h264_data, h264_len, XTVF_VIDEO_TYPE, timestamp);
+			add_xftp_frame((char *)h264_data, h264_len, XTVF_VIDEO_TYPE, bpu_timestamp);
 		}
 
 		free(h264_data);
@@ -1050,90 +1043,69 @@ int vps_small_process(VIDEO_FRAME_S* stFrameInfo)
 	
 	return 0;
 }
-// 获取解码后的图像并交给vps处理
-void *get_decode_data(void *attr)
+
+// 直接将UVC的NV12数据送入VPS处理
+int uvc_nv12_to_vps(uint8_t *y_ptr, uint8_t *uv_ptr, uint32_t timestamp, int width, int height)
 {
-	int s32Ret;
-	SAMPLE_ATTR_S *sample_attr = (SAMPLE_ATTR_S *)attr;
-	VIDEO_FRAME_S stFrameInfo;
-	struct timeval now;
-	struct timespec outtime;
-
-	fprintf(stderr, "[get_decode_data] ------ 2 g_is_running:%d\n", g_is_running);
-	pthread_mutex_lock(&sample_attr->init_lock);
-	gettimeofday(&now, NULL);
-	outtime.tv_sec = now.tv_sec + 1;
-	outtime.tv_nsec = now.tv_usec * 1000;
-	pthread_cond_timedwait(&sample_attr->init_cond, &sample_attr->init_lock, &outtime);
-	pthread_mutex_unlock(&sample_attr->init_lock);
-	while (!g_is_stop) {
-		// 获取解码后的图像
-		s32Ret = HB_VDEC_GetFrame(g_vdecChn, &stFrameInfo, 2000);
-		if (s32Ret) {
-			fprintf(stderr,"[get_decode_data] HB_VDEC_GetFrame failed, s32Ret = %d\n", s32Ret);
-			usleep(5 * 1000);
-			continue;
+	int ret;
+	static uint32_t size_y, size_uv;
+	
+	if (!g_buf_is_alloc) {
+		memset(&g_feedback_buf, 0, sizeof(hb_vio_buffer_t));
+		size_y = width * height;
+		size_uv = size_y / 2;
+		ret = prepare_user_buf(&g_feedback_buf, size_y, size_uv);
+		if (ret) {
+			fprintf(stderr, "uvc_nv12_to_vps prepare_user_buf fail...\n");
+			return -1;
 		}
-		// 将解码后的图像交给VPS处理
-		s32Ret = vps_small_process(&stFrameInfo);
-		if (s32Ret) {
-			fprintf(stderr, "[get_decode_data] vps_small_process failed, s32Ret = %d\n", s32Ret);
-		}
-		HB_VDEC_ReleaseFrame(g_vdecChn, &stFrameInfo);
+		g_feedback_buf.img_info.planeCount = 2;
+		g_feedback_buf.img_info.img_format = 8; // NV12格式
+		g_feedback_buf.img_addr.width = width;
+		g_feedback_buf.img_addr.height = height;
+		g_feedback_buf.img_addr.stride_size = width;
+		g_buf_is_alloc = 1;
 	}
-END:
-	if (g_buf_is_alloc) {
-		g_buf_is_alloc = 0;
-	}
-	HB_VDEC_StopRecvStream(g_vdecChn);
-	HB_VDEC_DestroyChn(g_vdecChn);
-	fprintf(stderr, "[get_decode_data] END: end...\n");
-	pthread_exit(NULL);
-
-	return 0;
-}
-// 将 h264 视频帧推给解码器
-int send_stream_to_bpu(uint8_t *buffer, int len)
-{
-	int rt = 0;
-	struct timeval tv;
-
-	if (!buffer || len <= 4) {
-		return -1;
-	}
-
-	VDEC_CHN_STATUS_S pstStatus;
-	HB_VDEC_QueryStatus(g_vdecChn, &pstStatus);
-	if (pstStatus.cur_input_buf_cnt >= (uint32_t)g_mmz_cnt) {
-		usleep(10000);
+	
+	// 直接将UVC的NV12数据复制到VPS缓冲区
+	size_y = width * height;
+	size_uv = size_y / 2;
+	memcpy(g_feedback_buf.img_addr.addr[0], y_ptr, size_y);
+	memcpy(g_feedback_buf.img_addr.addr[1], uv_ptr, size_uv);
+	
+	// 发送到VPS处理
+	ret = HB_VPS_SendFrame(0, &g_feedback_buf, -1);
+	if (ret) {
+		fprintf(stderr, "uvc_nv12_to_vps HB_VPS_SendFrame fail...\n");
 		return -2;
 	}
-
-	g_mmz_index = g_count % g_mmz_cnt;
-	if (len <= g_mmz_size) {
-		memcpy((void*)g_mmz_vaddr[g_mmz_index], (void*)buffer, len);
-		g_bufSize = len;
-	} else {
-		fprintf(stderr, "[send_stream_to_bpu] The external stream buffer is too small! h264_data_len:%d, g_mmz_size:%d\n", len, g_mmz_size);
-		g_eos = 1;
+	
+	// 记录关键帧信息用于推理结果同步
+	// 对于UVC流，我们可以将所有帧都视为关键帧，或者根据需要调整
+	FRAME_INFO f_info;
+	f_info.timestamp = timestamp;
+	f_info.seqno = g_frame_seqno++;
+	ret = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
+	if (ret) {
+		fprintf(stderr, "uvc_nv12_to_vps frame_cir_buff_enqueue fail...\n");
+		return -3;
 	}
-	g_pstStream.pstPack.phy_ptr = g_mmz_paddr[g_mmz_index];
-	g_pstStream.pstPack.vir_ptr = g_mmz_vaddr[g_mmz_index];
-	g_pstStream.pstPack.pts = g_count++;
-	g_pstStream.pstPack.src_idx = g_mmz_index;
-	if (!g_eos) {
-		g_pstStream.pstPack.size = g_bufSize;
-		g_pstStream.pstPack.stream_end = HB_FALSE;
-	} else {
-		g_pstStream.pstPack.size = 0;
-		g_pstStream.pstPack.stream_end = HB_TRUE;
-	}
-	// 将h264视频帧推给解码器进行解码
-	rt = HB_VDEC_SendStream(g_vdecChn, &g_pstStream, -1);
-	if (rt == -HB_ERR_VDEC_OPERATION_NOT_ALLOWDED || rt == -HB_ERR_VDEC_UNKNOWN) {
-		fprintf(stderr, "[send_stream_to_bpu] HB_VDEC_SendStream failed\n");
-	}
-
+	
+	return 0;
+}
+// 获取解码后的图像并交给vps处理（UVC流不需要此功能）
+void *get_decode_data(void *attr)
+{
+	// UVC流直接将NV12数据送入VPS，不需要此函数
+	fprintf(stderr, "[get_decode_data] UVC stream does not use this function\n");
+	pthread_exit(NULL);
+	return 0;
+}
+// 将 h264 视频帧推给解码器（UVC流不需要此功能）
+int send_stream_to_bpu(uint8_t *buffer, int len)
+{
+	// UVC流直接使用NV12数据，不需要将H264推给解码器
+	fprintf(stderr, "[send_stream_to_bpu] UVC stream does not use this function\n");
 	return 0;
 }
 // 初始化解码器channel
@@ -1239,42 +1211,19 @@ int vdecode_init(void *attr)
 
 	return 0;
 }
-// 初始化解码器/vps/bpu
+// 初始化vps/bpu（UVC流不需要解码器）
 int init_decode(void)
 {
 	int s32Ret, i;
 	VP_CONFIG_S vpConf;
-	pthread_t getDecodeId;
-	SAMPLE_ATTR_S sample_vdec;
 
 	memset(&vpConf, 0, sizeof(VP_CONFIG_S));
-	memset(&sample_vdec, 0, sizeof(SAMPLE_ATTR_S));
 
-	// 初始化视频解码器
+	// 初始化VP（视频处理）模块
 	vpConf.u32MaxPoolCnt = 32;
 	HB_VP_SetConfig(&vpConf);
 	s32Ret = HB_VP_Init();
-	fprintf(stderr, "[init_decode] HB_VP_Init s32Ret = %d !\n",s32Ret);
-	s32Ret = HB_VDEC_Module_Init();
-	fprintf(stderr, "[init_decode] HB_VDEC_Module_Init: s32Ret = %d\n", s32Ret);
-
-	// 配置视频解码器channel
-	sample_vdec.channel = 0;
-	sample_vdec.enType = PT_H264;
-	sample_vdec.picWidth = g_v_width;
-	sample_vdec.picHeight = g_v_height;
-	pthread_cond_init(&sample_vdec.init_cond, NULL);
-	pthread_mutex_init(&sample_vdec.init_lock, NULL);
-	vdecode_init(&sample_vdec);
-	fprintf(stderr, "[init_decode] vdecode_init after.\n");
-	// 启动获取解码后的图像的线程
-	s32Ret = pthread_create(&getDecodeId, NULL, get_decode_data, &sample_vdec);
-	fprintf(stderr, "[init_decode] pthread_create get_decode_data s32Ret = %d\n", s32Ret);
-	if (s32Ret) {
-		HB_VDEC_Module_Uninit();
-		HB_VP_Exit();
-		return 0;
-	}
+	fprintf(stderr, "[init_decode] HB_VP_Init s32Ret = %d !\n", s32Ret);
 
 	frame_cir_buff_init(&g_frame_cir_buff);
 	g_eos = 0;
@@ -1282,13 +1231,6 @@ int init_decode(void)
 	g_bufSize = 0;
 	g_mmz_index = 0;
 	memset(&g_pstStream, 0, sizeof(VIDEO_STREAM_S));
-	memset(g_mmz_vaddr, 0, sizeof(g_mmz_vaddr));
-	memset(g_mmz_paddr, 0, sizeof(g_mmz_paddr));
-	g_mmz_size = g_v_width * g_v_height;
-	g_mmz_cnt = 5;
-	for (i = 0; i < g_mmz_cnt; i++) {
-		HB_SYS_Alloc(&g_mmz_paddr[i], (void **)&g_mmz_vaddr[i], g_mmz_size);
-	}
 
 	// 初始化vps
 	vps_small_init();
@@ -1301,23 +1243,14 @@ int init_decode(void)
 	// 启动获取推理结果推送给流媒体服务器的线程
 	std::thread t2(fcos_do_post);
 
-	// 等待所有线程结束
-	fprintf(stderr, "[init_decode] before pthread_join getDecodeId, t1.join, t2.join ... ...\n");
-	pthread_join(getDecodeId, NULL);
+	// 只等待BPU相关线程结束，跳过解码器线程
+	fprintf(stderr, "[init_decode] before t1.join, t2.join ... ...\n");
 	t1.join();
 	t2.join();
-
-	pthread_mutex_destroy(&sample_vdec.init_lock);
-	pthread_cond_destroy(&sample_vdec.init_cond);
 
 	sp_release_bpu_module(g_bpu_handle);
 	fprintf(stderr, "[init_decode] after sp_release_bpu_module\n");
 
-	for (i = 0; i < g_mmz_cnt; i++) {
-		HB_SYS_Free(g_mmz_paddr[i], g_mmz_vaddr[i]);
-	}
-	s32Ret = HB_VDEC_Module_Uninit();
-	fprintf(stderr, "[init_decode] HB_VDEC_Module_Uninit: s32Ret = %d\n", s32Ret);
 	s32Ret = HB_VP_Exit();
 	fprintf(stderr, "[init_decode] HB_VP_Exit: s32Ret = %d. Done !\n", s32Ret);
 
