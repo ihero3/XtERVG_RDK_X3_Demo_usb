@@ -1002,12 +1002,12 @@ void *uvc_thread_func(void *arg) {
             break;
         }
 
-        // 开启视频帧推理线程
-        if (g_is_open_started == 0) {
-            g_is_open_started = 1;
-            ret = start_bpu_and_push();
-            fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
-        }
+        // 开启视频帧推理线程  ihero
+        // if (g_is_open_started == 0) {
+        //     g_is_open_started = 1;
+        //     ret = start_bpu_and_push();
+        //     fprintf(stderr, "[uvc_thread_func] start_bpu_and_push(0) = %d\n", ret);
+        // }
 
         timestamp = getTimeMsec();
         uint32_t bpu_timestamp = timestamp - g_start_vts;
@@ -1020,11 +1020,11 @@ void *uvc_thread_func(void *arg) {
             y_ptr = (uint8_t *)buffers[buf.index].start;
             uv_ptr = y_ptr + g_v_width * g_v_height;
             
-            // 1. 送入VPS进行推理处理
-            ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
-            if (ret != 0) {
-                fprintf(stderr, "[uvc_thread_func] uvc_nv12_to_vps failed, ret=%d\n", ret);
-            }
+            // 1. 送入VPS进行推理处理 ihero
+            // ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
+            // if (ret != 0) {
+            //     fprintf(stderr, "[uvc_thread_func] uvc_nv12_to_vps failed, ret=%d\n", ret);
+            // }
             
             // 2. 编码为H264
             ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
@@ -1036,24 +1036,7 @@ void *uvc_thread_func(void *arg) {
                 free(h264_data);
                 h264_data = NULL;
             }
-        } else if (actual_pixfmt == V4L2_PIX_FMT_YUYV) {
-            // YUYV格式需要先转换为NV12
-            uint8_t *nv12_tmp = (uint8_t *)malloc(g_v_width * g_v_height * 3 / 2);
-            if (nv12_tmp) {
-                yuyv_to_nv12((uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
-                y_ptr = nv12_tmp;
-                uv_ptr = nv12_tmp + g_v_width * g_v_height;
-                
-                ret = uvc_nv12_to_vps(y_ptr, uv_ptr, bpu_timestamp, g_v_width, g_v_height);
-                ret = yuv_to_h264_nv12(y_ptr, uv_ptr, &h264_data, &h264_len, g_v_width, g_v_height);
-                if (h264_data && h264_len > 0) {
-                    add_xftp_frame((char *)h264_data, h264_len, XTVF_VIDEO_TYPE, bpu_timestamp);
-                    free(h264_data);
-                }
-                free(nv12_tmp);
-            }
-        }
-
+        } 
         // 放回缓冲区
         if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
             fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
