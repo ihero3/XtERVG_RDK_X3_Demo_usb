@@ -1898,7 +1898,10 @@ int main(int argc, char *argv[]) {
     while(i--) {
         rt = start_msg_client();
         fprintf(stderr, "[%s] start_msg_client, rt = %d\n", argv[0], rt);
-        if (!rt) break;
+        if (!rt) {
+			usleep(500 * 1000);
+			break;
+		}
         sleep(1);
     }
     
