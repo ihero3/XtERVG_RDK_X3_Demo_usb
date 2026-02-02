@@ -102,6 +102,7 @@ typedef struct {
     pthread_cond_t init_cond;
 } SAMPLE_ATTR_S;
 
+// 全局变量
 int g_msgid_cur = 0, g_is_transfer_to_mp4 = 0, g_index = 0, g_is_check_video_pulling = 0, g_is_check_video_pull_pid = 0, 
     g_is_sending = 0, g_is_video_has_started = 0,
     g_is_online = 0, g_xttp_login_times = 0;
@@ -162,29 +163,47 @@ int g_is_open_started = 0;
 int g_vinChn = 0;
 int g_is_uvc_running = 0;
 pthread_t g_uvc_thread = 0;
-
-// 全局状态标志
 int g_is_running = 1;
 long g_start_vts = 0;
+int g_is_udp = 0;
 
-// 函数声明
-void stop_session(void);
-void myStopXttpCallback(void);
-void video_session_did_stop_cb(void);
-
-#ifdef __cplusplus
-    extern "C" {
-#endif
+// 前向声明
 int ion_alloc_phy(int size, int *fd, char **vaddr, uint64_t * paddr);
-#ifdef __cplusplus
-    }
-#endif
+int ion_open(void);
 
 // ============================ 辅助函数 ============================
-uint32_t getTimeMsec() {
+// 修复函数声明冲突
+long getTimeMsec(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (uint32_t)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+    return (long)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
+
+// 内存分配函数
+int prepare_user_buf(void *buf, uint32_t size_y, uint32_t size_uv) {
+    int ret;
+    hb_vio_buffer_t *buffer = (hb_vio_buffer_t *)buf;
+
+    if (!buffer) {
+        return -1;
+    }
+
+    buffer->img_info.fd[0] = ion_open();
+    buffer->img_info.fd[1] = ion_open();
+    
+    ret = ion_alloc_phy(size_y, &buffer->img_info.fd[0], &buffer->img_addr.addr[0], &buffer->img_addr.paddr[0]);
+    if (ret) {
+        fprintf(stderr, "prepare user buf error 1\n");
+        return ret;
+    }
+    
+    ret = ion_alloc_phy(size_uv, &buffer->img_info.fd[1], &buffer->img_addr.addr[1], &buffer->img_addr.paddr[1]);
+    if (ret) {
+        fprintf(stderr, "prepare user buf error 2\n");
+        return ret;
+    }
+
+    return 0;
 }
 
 // 视频流推到流媒体服务器
@@ -194,7 +213,8 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
     uint16_t send_len = 0;
 
     if (!h264oraac || insize <= 0 || type <= 0) {
-        fprintf(stderr, "[add_xftp_frame] error: h264oraac:%p, insize:%d, type:%d, g_start_vts:%ld, return -1;\n", h264oraac, insize, type, g_start_vts);
+        fprintf(stderr, "[add_xftp_frame] error: h264oraac:%p, insize:%d, type:%d, g_start_vts:%ld, return -1;\n", 
+                h264oraac, insize, type, g_start_vts);
         return -1;
     }
 
@@ -210,29 +230,14 @@ int add_xftp_frame(const char *h264oraac, int insize, int type, uint32_t timesta
     return 0;
 }
 
-// ============================ 内存分配函数 ============================
-int prepare_user_buf(void *buf, uint32_t size_y, uint32_t size_uv) {
-    int ret;
-    hb_vio_buffer_t *buffer = (hb_vio_buffer_t *)buf;
-
-    if (!buffer) {
+// 推理结果推到流媒体服务器
+int add_script_frame(const char *script_data, int script_len, int inner_type, uint32_t timestamp) {
+    if (!script_data || script_len <= 0) {
+        fprintf(stderr, "[add_script_frame] error: script_data:%p, insize:%d, inner_type:%d, return -1;\n", 
+                script_data, script_len, inner_type);
         return -1;
     }
-
-    buffer->img_info.fd[0] = ion_open();
-    buffer->img_info.fd[1] = ion_open();
-    ret = ion_alloc_phy(size_y, &buffer->img_info.fd[0], &buffer->img_addr.addr[0], &buffer->img_addr.paddr[0]);
-    if (ret) {
-        fprintf(stderr, "prepare user buf error 1\n");
-        return ret;
-    }
-    ret = ion_alloc_phy(size_uv, &buffer->img_info.fd[1], &buffer->img_addr.addr[1], &buffer->img_addr.paddr[1]);
-    if (ret) {
-        fprintf(stderr, "prepare user buf error 2\n");
-        return ret;
-    }
-
-    return 0;
+    return MuxScriptToXtvf(script_data, script_len, inner_type, timestamp);
 }
 
 // ============================ VENC编码函数 ============================
@@ -261,7 +266,7 @@ int init_venc(int width, int height) {
     }
 
     VENC_CHN_ATTR_S stChnAttr;
-    memset(&stChnAttr, 0, sizeof(stChnAttr));
+    memset(&stChnAttr, 0, sizeof(VENC_CHN_ATTR_S));
     stChnAttr.stVencAttr.enType = PT_H264;
     stChnAttr.stVencAttr.u32PicWidth = width;
     stChnAttr.stVencAttr.u32PicHeight = height;
@@ -310,6 +315,8 @@ int init_venc(int width, int height) {
             if (s32Ret == 0) {
                 fprintf(stderr, "[init_venc] mmzAlloc paddr = 0x%lx, vaddr = %p i = %d stride=%d size=%d\n", 
                         (unsigned long)g_mmz_paddr[i], g_mmz_vaddr[i], i, stride, g_mmz_size);
+            } else {
+                fprintf(stderr, "[init_venc] HB_SYS_Alloc failed for frame %d: %d\n", i, s32Ret);
             }
         }
         g_venc_mmz_alloc = 1;
@@ -354,9 +361,16 @@ int deinit_venc(void) {
 
 int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data, 
         int *h264_len, int width, int height) {
-    if (!y_ptr || !uv_ptr || !h264_data || !h264_len) return -1;
+    if (!y_ptr || !uv_ptr || !h264_data || !h264_len) {
+        fprintf(stderr, "[yuv_to_h264_nv12] Invalid parameters\n");
+        return -1;
+    }
+    
     if (!g_venc_inited) {
-        if (init_venc(width, height) != 0) return -2;
+        if (init_venc(width, height) != 0) {
+            fprintf(stderr, "[yuv_to_h264_nv12] init_venc failed\n");
+            return -2;
+        }
     }
 
     int y_size = width * height;
@@ -373,10 +387,12 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
         int uv_plane_size = stride * (height / 2);
         uint8_t *dst = (uint8_t *)g_mmz_vaddr[idx];
         
+        // Copy Y plane line by line
         for (int r = 0; r < height; r++) {
             memcpy(dst + r * stride, y_ptr + r * width, width);
         }
         
+        // Copy UV plane line by line
         uint8_t *dst_uv = dst + y_plane_size;
         for (int r = 0; r < height / 2; r++) {
             memcpy(dst_uv + r * stride, uv_ptr + r * width, width);
@@ -384,9 +400,9 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 
         // 设置YUV平面信息
         stFrame.stVFrame.phy_ptr[0] = g_mmz_paddr[idx];
-        stFrame.stVFrame.vir_ptr[0] = g_mmz_vaddr[idx];  // 直接赋值，无强制转换
+        stFrame.stVFrame.vir_ptr[0] = (char *)g_mmz_vaddr[idx];
         stFrame.stVFrame.phy_ptr[1] = g_mmz_paddr[idx] + y_plane_size;
-        stFrame.stVFrame.vir_ptr[1] = dst_uv;  // 直接赋值，无强制转换
+        stFrame.stVFrame.vir_ptr[1] = (char *)dst_uv;
         stFrame.stVFrame.phy_ptr[2] = 0;
         stFrame.stVFrame.vir_ptr[2] = NULL;
 
@@ -417,7 +433,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
         }
 
         uint32_t sz = stStream.pstPack.size;
-        hb_char *src = stStream.pstPack.vir_ptr;
+        char *src = stStream.pstPack.vir_ptr;
         if (sz > 0 && src) {
             *h264_data = (uint8_t *)malloc(sz);
             if (!*h264_data) {
@@ -435,8 +451,8 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
         return 0;
     } else {
         // fallback: use vir pointers directly
-        stFrame.stVFrame.vir_ptr[0] = y_ptr;  // 直接赋值
-        stFrame.stVFrame.vir_ptr[1] = uv_ptr; // 直接赋值
+        stFrame.stVFrame.vir_ptr[0] = (char *)y_ptr;
+        stFrame.stVFrame.vir_ptr[1] = (char *)uv_ptr;
         stFrame.stVFrame.vir_ptr[2] = NULL;
         stFrame.stVFrame.phy_ptr[0] = 0;
         stFrame.stVFrame.phy_ptr[1] = 0;
@@ -464,7 +480,7 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
         }
 
         uint32_t sz = stStream.pstPack.size;
-        hb_char *src = stStream.pstPack.vir_ptr;
+        char *src = stStream.pstPack.vir_ptr;
         if (sz > 0 && src) {
             *h264_data = (uint8_t *)malloc(sz);
             if (!*h264_data) {
@@ -484,18 +500,17 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 }
 
 // ============================ VPS处理函数 ============================
-// 初始化 VPS
+// 初始化 VPS - 基于官方示例修改
 void vps_small_init(void) {
     VPS_GRP_ATTR_S grp_attr;
     VPS_CHN_ATTR_S chn_attr;
     int ret;
     
-    // 1. 彻底清理残留资源
+    // 1. 清理可能的残留资源
     HB_VPS_DisableChn(0, 3);
     HB_VPS_StopGrp(0);
     HB_VPS_DestroyGrp(0);
-    
-    usleep(100000); // 等待资源释放
+    usleep(100000);
     
     // 2. 创建VPS组
     memset(&grp_attr, 0, sizeof(VPS_GRP_ATTR_S));
@@ -509,7 +524,15 @@ void vps_small_init(void) {
         return;
     }
     
-    // 3. 配置通道属性
+    // 3. 设置为离线模式
+    ret = HB_SYS_SetVINVPSMode(0, VIN_OFFLINE_VPS_OFFINE);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_SYS_SetVINVPSMode failed, ret=%d\n", ret);
+        HB_VPS_DestroyGrp(0);
+        return;
+    }
+    
+    // 4. 配置通道属性
     memset(&chn_attr, 0, sizeof(VPS_CHN_ATTR_S));
     chn_attr.enScale = 1;
     chn_attr.width = 512;
@@ -517,7 +540,7 @@ void vps_small_init(void) {
     chn_attr.frameDepth = 8;
     chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
-    // 4. 设置通道属性
+    // 5. 设置通道属性
     ret = HB_VPS_SetChnAttr(0, 3, &chn_attr);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_SetChnAttr failed, ret=%d\n", ret);
@@ -525,7 +548,7 @@ void vps_small_init(void) {
         return;
     }
     
-    // 5. 启用通道
+    // 6. 启用通道
     ret = HB_VPS_EnableChn(0, 3);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_EnableChn failed, ret=%d\n", ret);
@@ -533,7 +556,7 @@ void vps_small_init(void) {
         return;
     }
     
-    // 6. 启动VPS组
+    // 7. 启动VPS组
     ret = HB_VPS_StartGrp(0);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_StartGrp failed, ret=%d\n", ret);
@@ -564,7 +587,7 @@ int uvc_nv12_to_vps(uint8_t *y_ptr, uint8_t *uv_ptr, uint32_t timestamp, int wid
         size_uv = size_y / 2;
         ret = prepare_user_buf(&g_feedback_buf, size_y, size_uv);
         if (ret) {
-            fprintf(stderr, "uvc_nv12_to_vps prepare_user_buf fail...\n");
+            fprintf(stderr, "[uvc_nv12_to_vps] prepare_user_buf failed, ret=%d\n", ret);
             return -1;
         }
         g_feedback_buf.img_info.planeCount = 2;
@@ -573,26 +596,32 @@ int uvc_nv12_to_vps(uint8_t *y_ptr, uint8_t *uv_ptr, uint32_t timestamp, int wid
         g_feedback_buf.img_addr.height = height;
         g_feedback_buf.img_addr.stride_size = width;
         g_buf_is_alloc = 1;
-        fprintf(stderr, "[uvc_nv12_to_vps] Buffer allocated\n");
+        fprintf(stderr, "[uvc_nv12_to_vps] Buffer allocated for VPS\n");
     }
     
     size_y = width * height;
     size_uv = size_y / 2;
+    
+    // 复制数据到VPS缓冲区
     memcpy(g_feedback_buf.img_addr.addr[0], y_ptr, size_y);
     memcpy(g_feedback_buf.img_addr.addr[1], uv_ptr, size_uv);
     
+    // 发送到VPS处理
     ret = HB_VPS_SendFrame(0, &g_feedback_buf, 1000);
     if (ret != 0) {
-        fprintf(stderr, "uvc_nv12_to_vps HB_VPS_SendFrame fail, ret=%d\n", ret);
+        fprintf(stderr, "[uvc_nv12_to_vps] HB_VPS_SendFrame failed, ret=%d\n", ret);
         return -2;
     }
     
+    // 记录帧信息用于推理结果同步
     FRAME_INFO f_info;
     f_info.timestamp = timestamp;
     f_info.seqno = g_frame_seqno++;
+    
+    // 入队到环形缓冲区
     ret = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
     if (ret) {
-        fprintf(stderr, "uvc_nv12_to_vps frame_cir_buff_enqueue fail...\n");
+        fprintf(stderr, "[uvc_nv12_to_vps] frame_cir_buff_enqueue failed\n");
         return -3;
     }
     
@@ -621,21 +650,21 @@ void fcos_feed_bpu(void) {
         bpu_work fcos_work;
         ret = HB_VPS_GetChnFrame(0, 3, &g_chn_3_out_buf, 2000);
         if (ret) {
-            fprintf(stderr, "[fcos_feed_bpu] HB_VPS_GetChnFrame fail,ret = %d\n", ret);
+            fprintf(stderr, "[fcos_feed_bpu] HB_VPS_GetChnFrame fail, ret = %d\n", ret);
             usleep(10000);
             continue;
         }
         
         ret = frame_cir_buff_dequeue(&g_frame_cir_buff, &f_info);
         if (ret) {
-            fprintf(stderr, "[fcos_feed_bpu]--failed--continue\n");
+            fprintf(stderr, "[fcos_feed_bpu] frame_cir_buff_dequeue failed\n");
             HB_VPS_ReleaseChnFrame(0, 3, &g_chn_3_out_buf);
             continue;
         }
         
         g_cur_bpu_ts = f_info.timestamp;
         if (g_is_stop) {
-            fprintf(stderr, "[fcos_feed_bpu]--break\n");
+            fprintf(stderr, "[fcos_feed_bpu] stop flag set, breaking\n");
             break;
         }
         
@@ -643,27 +672,33 @@ void fcos_feed_bpu(void) {
             if (g_chn_3_out_buf.img_addr.width && g_chn_3_out_buf.img_addr.height) {
                 dsc = (char*)calloc(FRAME_BUFFER_SIZE(g_chn_3_out_buf.img_addr.width, g_chn_3_out_buf.img_addr.height), 1);
                 if (!dsc) {
-                    fprintf(stderr,"[fcos_feed_bpu] Failed to malloc dsc\n");
+                    fprintf(stderr, "[fcos_feed_bpu] Failed to malloc dsc\n");
                     goto END;
                 }
-                fprintf(stderr,"[fcos_feed_bpu] malloc dsc success\n");
+                fprintf(stderr, "[fcos_feed_bpu] malloc dsc success\n");
             } else {
-                fprintf(stderr,"[fcos_feed_bpu] Failed to malloc dsc(no width, no height)\n");
+                fprintf(stderr, "[fcos_feed_bpu] Failed to malloc dsc (no width/height)\n");
                 goto END;
             }
         }
         
+        // 复制Y平面数据
         memcpy((void*)dsc, g_chn_3_out_buf.img_addr.addr[0], 
                g_chn_3_out_buf.img_addr.width * g_chn_3_out_buf.img_addr.height);
+        
+        // 复制UV平面数据
         memcpy((void*)(dsc + g_chn_3_out_buf.img_addr.width * g_chn_3_out_buf.img_addr.height), 
                g_chn_3_out_buf.img_addr.addr[1], 
                g_chn_3_out_buf.img_addr.width * g_chn_3_out_buf.img_addr.height / 2);
         
         g_bpu_handle->output_tensor = &output_tensors[cur_ouput_buf_idx][0];
         fcos_work.start_time = std::chrono::high_resolution_clock::now();
+        
+        // 开始BPU推理
         sp_bpu_start_predict(g_bpu_handle, dsc);
         fcos_work.payload = g_bpu_handle->output_tensor;
         fcos_work_deque.push_back(fcos_work);
+        
         cur_ouput_buf_idx++;
         cur_ouput_buf_idx %= 5;
 
@@ -674,10 +709,12 @@ END:
     vps_small_release(&g_chn_3_out_buf);
     free(dsc);
     fcos_finish = true;
+    
     for (size_t i = 0; i < 5; i++) {
         sp_deinit_bpu_tensor(output_tensors[i], 15);
     }
-    fprintf(stderr, "[fcos_feed_bpu]--exit thread\n");
+    
+    fprintf(stderr, "[fcos_feed_bpu] exit thread\n");
     g_feed_is_over = 1;
 }
 
@@ -691,17 +728,19 @@ void fcos_do_post(void) {
     int enc_buff_len = 0;
 
     g_do_post_is_over = 0;
+    
     if (init_annotation_item_arr(&g_annotation_item_set)) {
-        fprintf(stderr, "[fcos_do_post]--init_annotation_item_arr failed, exit\n");
+        fprintf(stderr, "[fcos_do_post] init_annotation_item_arr failed, exit\n");
         g_do_post_is_over = 1;
         return;
     }
 
-    fprintf(stderr, "[fcos_do_post]--start...\n");
+    fprintf(stderr, "[fcos_do_post] start...\n");
     image_info.m_model_h = 512;
     image_info.m_model_w = 512;
     image_info.m_ori_height = g_v_height;
     image_info.m_ori_width = g_v_width;
+    
     std::vector<Detection> results;
     
     do {
@@ -714,14 +753,17 @@ void fcos_do_post(void) {
             auto work = fcos_work_deque.front();
             auto output = work.payload;
             auto stime = work.start_time;
+            
+            // 后处理推理结果
             fcos_post_process(output, &image_info, results);
             fcos_work_deque.pop_front();
             
             if (reset_annotation_item_arr(&g_annotation_item_set)) {
-                fprintf(stderr, "[fcos_do_post]--init_annotation_item_arr failed, break!\n");
+                fprintf(stderr, "[fcos_do_post] init_annotation_item_arr failed, break!\n");
                 break;
             }
             
+            // 处理每个检测结果
             for (i = 0; i < results.size(); i++) {
                 this_item.id = results[i].id;
                 this_item.conf_level_1m = results[i].score * ONE_MILLION_BASE;
@@ -732,9 +774,11 @@ void fcos_do_post(void) {
                 rt = add_annotioan_item_to_set(&g_annotation_item_set, &this_item);
             }
 
+            // 如果有检测结果，编码并推送
             if (g_annotation_item_set.annotion_item_len) {
                 g_annotation_item_set.anno_ts = g_cur_bpu_ts;
-                if (!(enc_buff_len = encode_annotation_set_buff(&g_annotation_item_set, enc_buff))) {
+                enc_buff_len = encode_annotation_set_buff(&g_annotation_item_set, enc_buff);
+                if (!enc_buff_len) {
                     fprintf(stderr, "[fcos_do_post] ERROR: failed in encode_annotation_set_buff\n");
                 } else {
                     rt = add_script_frame((char *)enc_buff, enc_buff_len, SCRIPT_INNER_TYPE, g_cur_bpu_ts);
@@ -744,23 +788,15 @@ void fcos_do_post(void) {
         usleep(10000);
     } while (!fcos_finish);
     
-    fprintf(stderr, "[fcos_do_post]--exit--thread\n");
+    fprintf(stderr, "[fcos_do_post] exit thread\n");
     g_do_post_is_over = 1;
-}
-
-// 推理结果推到流媒体服务器
-int add_script_frame(const char *script_data, int script_len, int inner_type, uint32_t timestamp) {
-    if (!script_data || script_len <= 0) {
-        fprintf(stderr, "[add_script_frame] error: script_data:%p, insize:%d, inner_type:%d, return -1;\n", script_data, script_len, inner_type);
-        return -1;
-    }
-    return MuxScriptToXtvf(script_data, script_len, inner_type, timestamp);
 }
 
 // ============================ UVC处理函数 ============================
 static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height) {
     uint8_t *y = dst;
     uint8_t *uv = dst + width * height;
+    
     for (int j = 0; j < height; j += 2) {
         for (int i = 0; i < width; i += 2) {
             int idx00 = (j * width + i) * 2;
@@ -778,11 +814,13 @@ static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height
             uint8_t y11 = src[idx11];
             uint8_t v10 = src[idx11 + 1];
 
+            // Y分量
             y[j * width + i] = y00;
             y[j * width + i + 1] = y01;
             y[(j + 1) * width + i] = y10;
             y[(j + 1) * width + i + 1] = y11;
 
+            // UV分量（取平均值）
             uint8_t u = (uint8_t)(((int)u00 + (int)u10) / 2);
             uint8_t v = (uint8_t)(((int)v00 + (int)v10) / 2);
 
@@ -1070,7 +1108,10 @@ int init_decode(void) {
         memset(&vpConf, 0, sizeof(VP_CONFIG_S));
         vpConf.u32MaxPoolCnt = 32;
         HB_VP_SetConfig(&vpConf);
-        HB_VP_Init();
+        s32Ret = HB_VP_Init();
+        if (s32Ret != 0) {
+            fprintf(stderr, "[init_decode] HB_VP_Init failed, ret=%d\n", s32Ret);
+        }
     }
 
     frame_cir_buff_init(&g_frame_cir_buff);
@@ -1082,6 +1123,10 @@ int init_decode(void) {
 
     // 初始化模型文件
     g_bpu_handle = sp_init_bpu_module(MODEL_FILE);
+    if (!g_bpu_handle) {
+        fprintf(stderr, "[init_decode] sp_init_bpu_module failed\n");
+        return -1;
+    }
     fprintf(stderr, "[init_decode] sp_init_bpu_module g_bpu_handle = %p\n", g_bpu_handle);    
 
     // 启动推理线程
@@ -1104,7 +1149,7 @@ void *bpu_and_push(void *arg) {
     char *url;
 
     init_decode();
-    fprintf(stderr, "[bpu_and_push] after sp_release_vio_module, g_should_exit_main=%d\n", g_should_exit_main);
+    fprintf(stderr, "[bpu_and_push] after init_decode, g_should_exit_main=%d\n", g_should_exit_main);
     
     if (g_should_exit_main) {
         g_is_running = 0;
@@ -1129,7 +1174,7 @@ int start_bpu_and_push(void) {
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    fprintf(stderr, "[start_bpu_and_push] -----1 \n");
+    fprintf(stderr, "[start_bpu_and_push] creating bpu_and_push thread\n");
     
     if (pthread_create(&pid, &attr, bpu_and_push, NULL) != 0) {
         g_bpu_and_push_tid = 0;
@@ -1845,7 +1890,7 @@ int main(int argc, char *argv[]) {
     // 登录信令服务器
     while(i--) {
         rt = start_msg_client();
-        fprintf(stderr, "[%s] 1 start start_msg_client, rt = %d\n", argv[0], rt);
+        fprintf(stderr, "[%s] start_msg_client, rt = %d\n", argv[0], rt);
         if (!rt) break;
         sleep(1);
     }
@@ -1860,7 +1905,7 @@ int main(int argc, char *argv[]) {
         sleep(1);
         if (!g_is_online) {
             rt = start_msg_client();
-            fprintf(stderr, "[%s] 2 while start_msg_client, rt = %d\n", argv[0], rt);
+            fprintf(stderr, "[%s] while start_msg_client, rt = %d\n", argv[0], rt);
         }
     }
 
