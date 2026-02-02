@@ -508,6 +508,46 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 }
 
 // ============================ VPS处理函数 ============================
+
+// VPS状态检查函数
+void check_vps_status(int group_number) 
+{
+    int ret;
+    VPS_GRP_ATTR_S grp_attr;
+    VPS_CHN_ATTR_S chn_attr;
+    
+    fprintf(stderr, "[check_vps_status] Checking VPS status...\n");
+    
+    // 检查组属性
+    ret = HB_VPS_GetGrpAttr(group_number, &grp_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Group 0 exists: maxW=%d, maxH=%d, frameDepth=%d\n",
+                grp_attr.maxW, grp_attr.maxH, grp_attr.frameDepth);
+    } else {
+        fprintf(stderr, "[check_vps_status] Group 0 does not exist or error: %d\n", ret);
+    }
+    
+    // 检查通道属性（通道3）
+    ret = HB_VPS_GetChnAttr(group_number, 3, &chn_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Channel 3 exists: width=%d, height=%d, enScale=%d\n",
+                chn_attr.width, chn_attr.height, chn_attr.enScale);
+    } else {
+        fprintf(stderr, "[check_vps_status] Channel 3 does not exist or error: %d\n", ret);
+    }
+    
+    // 检查通道属性（通道1）
+    ret = HB_VPS_GetChnAttr(group_number, 1, &chn_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Channel 1 exists: width=%d, height=%d, enScale=%d\n",
+                chn_attr.width, chn_attr.height, chn_attr.enScale);
+    } else {
+        fprintf(stderr, "[check_vps_status] Channel 1 does not exist or error: %d\n", ret);
+    }
+}
+
+
+
 // 初始化 VPS - 基于官方示例修改
 void vps_small_init(int group_number) 
 {
@@ -551,6 +591,7 @@ void vps_small_init(int group_number)
     chn_attr.frameDepth = 8;
     chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
+	check_vps_status(group_number);
     // 5. 设置通道属性
     ret = HB_VPS_SetChnAttr(group_number, 1, &chn_attr);
     if (ret != 0) {
@@ -578,44 +619,6 @@ void vps_small_init(int group_number)
     
     fprintf(stderr, "[vps_small_init] VPS group %d, channel 3 initialized successfully\n", group_number);
 }
-
-// VPS状态检查函数
-void check_vps_status(int group_number) 
-{
-    int ret;
-    VPS_GRP_ATTR_S grp_attr;
-    VPS_CHN_ATTR_S chn_attr;
-    
-    fprintf(stderr, "[check_vps_status] Checking VPS status...\n");
-    
-    // 检查组属性
-    ret = HB_VPS_GetGrpAttr(group_number, &grp_attr);
-    if (ret == 0) {
-        fprintf(stderr, "[check_vps_status] Group 0 exists: maxW=%d, maxH=%d, frameDepth=%d\n",
-                grp_attr.maxW, grp_attr.maxH, grp_attr.frameDepth);
-    } else {
-        fprintf(stderr, "[check_vps_status] Group 0 does not exist or error: %d\n", ret);
-    }
-    
-    // 检查通道属性（通道3）
-    ret = HB_VPS_GetChnAttr(group_number, 3, &chn_attr);
-    if (ret == 0) {
-        fprintf(stderr, "[check_vps_status] Channel 3 exists: width=%d, height=%d, enScale=%d\n",
-                chn_attr.width, chn_attr.height, chn_attr.enScale);
-    } else {
-        fprintf(stderr, "[check_vps_status] Channel 3 does not exist or error: %d\n", ret);
-    }
-    
-    // 检查通道属性（通道1）
-    ret = HB_VPS_GetChnAttr(group_number, 1, &chn_attr);
-    if (ret == 0) {
-        fprintf(stderr, "[check_vps_status] Channel 1 exists: width=%d, height=%d, enScale=%d\n",
-                chn_attr.width, chn_attr.height, chn_attr.enScale);
-    } else {
-        fprintf(stderr, "[check_vps_status] Channel 1 does not exist or error: %d\n", ret);
-    }
-}
-
 
 // 释放 VPS
 void vps_small_release(hb_vio_buffer_t* chn_3_out_buf) {
@@ -1003,9 +1006,6 @@ void *uvc_thread_func(void *arg) {
     // 1. 先初始化VPS  ihero
     vps_small_init(g_vps_group_number);
     
-    // 检查VPS是否初始化成功
-    check_vps_status(g_vps_group_number);
-	
     // 2. 再初始化视频编码器
     ret = init_venc(g_v_width, g_v_height);
     if (ret != 0) {
