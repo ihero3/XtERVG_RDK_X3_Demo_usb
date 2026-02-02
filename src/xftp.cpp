@@ -102,7 +102,12 @@ typedef struct {
     pthread_cond_t init_cond;
 } SAMPLE_ATTR_S;
 
-// 全局变量
+// 使用rtsp_utils库中的全局变量，避免重复定义
+extern int g_is_udp;
+extern int g_is_running;
+extern long g_start_vts;
+
+// 本地全局变量
 int g_msgid_cur = 0, g_is_transfer_to_mp4 = 0, g_index = 0, g_is_check_video_pulling = 0, g_is_check_video_pull_pid = 0, 
     g_is_sending = 0, g_is_video_has_started = 0,
     g_is_online = 0, g_xttp_login_times = 0;
@@ -163,9 +168,6 @@ int g_is_open_started = 0;
 int g_vinChn = 0;
 int g_is_uvc_running = 0;
 pthread_t g_uvc_thread = 0;
-int g_is_running = 1;
-long g_start_vts = 0;
-int g_is_udp = 0;
 
 // 前向声明
 int ion_alloc_phy(int size, int *fd, char **vaddr, uint64_t * paddr);
@@ -181,14 +183,10 @@ void stop_session(void);
 // 消息回调函数前向声明
 void myStopXttpCallback(void);
 
-// ============================ 辅助函数 ============================
-// 修复函数声明冲突
-long getTimeMsec(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
-}
+// 使用rtsp_utils库中的getTimeMsec函数，避免重复定义
+extern long getTimeMsec(void);
 
+// ============================ 辅助函数 ============================
 // 内存分配函数
 int prepare_user_buf(void *buf, uint32_t size_y, uint32_t size_uv) {
     int ret;
@@ -198,19 +196,18 @@ int prepare_user_buf(void *buf, uint32_t size_y, uint32_t size_uv) {
         return -1;
     }
 
-    buffer->img_info.fd[0] = ion_open();
-    buffer->img_info.fd[1] = ion_open();
-    
-    ret = ion_alloc_phy(size_y, &buffer->img_info.fd[0], &buffer->img_addr.addr[0], &buffer->img_addr.paddr[0]);
-    if (ret) {
-        fprintf(stderr, "prepare user buf error 1\n");
-        return ret;
+    // 使用HB_SYS_Alloc分配内存，避免使用ion_open和ion_alloc_phy
+    ret = HB_SYS_Alloc(&buffer->img_addr.paddr[0], (void **)&buffer->img_addr.addr[0], size_y);
+    if (ret != 0) {
+        fprintf(stderr, "prepare_user_buf: HB_SYS_Alloc for Y plane failed, ret=%d\n", ret);
+        return -1;
     }
-    
-    ret = ion_alloc_phy(size_uv, &buffer->img_info.fd[1], &buffer->img_addr.addr[1], &buffer->img_addr.paddr[1]);
-    if (ret) {
-        fprintf(stderr, "prepare user buf error 2\n");
-        return ret;
+
+    ret = HB_SYS_Alloc(&buffer->img_addr.paddr[1], (void **)&buffer->img_addr.addr[1], size_uv);
+    if (ret != 0) {
+        fprintf(stderr, "prepare_user_buf: HB_SYS_Alloc for UV plane failed, ret=%d\n", ret);
+        HB_SYS_Free(buffer->img_addr.paddr[0], buffer->img_addr.addr[0]);
+        return -2;
     }
 
     return 0;
