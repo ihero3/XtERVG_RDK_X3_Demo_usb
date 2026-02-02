@@ -842,27 +842,75 @@ int prepare_user_buf(void *buf, uint32_t size_y, uint32_t size_uv)
 	return 0;
 }
 // 初始化 vps
+// 初始化 vps
 void vps_small_init(void)
 {
-	VPS_GRP_ATTR_S grp_attr;
-	VPS_CHN_ATTR_S chn_3_attr;
+    VPS_GRP_ATTR_S grp_attr;
+    VPS_CHN_ATTR_S chn_3_attr;
+    int ret;
 
-	memset(&grp_attr, 0, sizeof(VPS_GRP_ATTR_S));
-	grp_attr.maxW = g_v_width;
-	grp_attr.maxH = g_v_height;
-	grp_attr.frameDepth = 8;
-	HB_VPS_CreateGrp(0, &grp_attr);
-	HB_SYS_SetVINVPSMode(0, VIN_OFFLINE_VPS_OFFINE);
+    // 清理可能存在的VPS资源，确保干净的状态
+    HB_VPS_StopGrp(0);
+    HB_VPS_DisableChn(0, 3);
+    HB_VPS_DestroyGrp(0);
 
-	memset(&chn_3_attr, 0, sizeof(VPS_CHN_ATTR_S));
-	chn_3_attr.enScale = 1;
-	chn_3_attr.width = 512;
-	chn_3_attr.height = 512;
-	chn_3_attr.frameDepth = 8;
-	HB_VPS_SetChnAttr(0, 3, &chn_3_attr);
-	HB_VPS_EnableChn(0, 3);
-	HB_VPS_StartGrp(0);
+    // 创建VPS组
+    memset(&grp_attr, 0, sizeof(VPS_GRP_ATTR_S));
+    grp_attr.maxW = g_v_width;
+    grp_attr.maxH = g_v_height;
+    grp_attr.frameDepth = 8;
+    grp_attr.enPixelFormat = PIXEL_FORMAT_NV12;
+    
+    ret = HB_VPS_CreateGrp(0, &grp_attr);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_VPS_CreateGrp failed, ret=%d\n", ret);
+        return;
+    }
+
+    // 设置为离线模式
+    ret = HB_SYS_SetVINVPSMode(0, VIN_OFFLINE_VPS_OFFINE);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_SYS_SetVINVPSMode failed, ret=%d\n", ret);
+        HB_VPS_DestroyGrp(0);
+        return;
+    }
+
+    // 配置通道3
+    memset(&chn_3_attr, 0, sizeof(VPS_CHN_ATTR_S));
+    chn_3_attr.enScale = 1; // 启用缩放
+    chn_3_attr.width = 512; // 输出宽度
+    chn_3_attr.height = 512; // 输出高度
+    chn_3_attr.frameDepth = 8; // 帧深度
+    chn_3_attr.enPixelFormat = PIXEL_FORMAT_NV12; // 输出格式
+    
+    // 先设置通道属性
+    ret = HB_VPS_SetChnAttr(0, 3, &chn_3_attr);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_VPS_SetChnAttr failed, ret=%d\n", ret);
+        HB_VPS_DestroyGrp(0);
+        return;
+    }
+
+    // 再启用通道
+    ret = HB_VPS_EnableChn(0, 3);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_VPS_EnableChn failed, ret=%d\n", ret);
+        HB_VPS_DestroyGrp(0);
+        return;
+    }
+
+    // 最后启动VPS组
+    ret = HB_VPS_StartGrp(0);
+    if (ret != 0) {
+        fprintf(stderr, "[vps_small_init] HB_VPS_StartGrp failed, ret=%d\n", ret);
+        HB_VPS_DisableChn(0, 3);
+        HB_VPS_DestroyGrp(0);
+        return;
+    }
+
+    fprintf(stderr, "[vps_small_init] VPS group 0, channel 3 initialized successfully\n");
 }
+
 // 释放 vps
 void vps_small_release(hb_vio_buffer_t* chn_3_out_buf)
 {
@@ -1215,46 +1263,42 @@ int vdecode_init(void *attr)
 int init_decode(void)
 {
 	int s32Ret, i;
-	VP_CONFIG_S vpConf;
 
-	memset(&vpConf, 0, sizeof(VP_CONFIG_S));
+    // 只在VP未初始化时进行初始化
+    VP_CONFIG_S vpConf;
+    if (HB_VP_GetConfig(&vpConf) != 0) {
+        memset(&vpConf, 0, sizeof(VP_CONFIG_S));
+        vpConf.u32MaxPoolCnt = 32;
+        HB_VP_SetConfig(&vpConf);
+        HB_VP_Init();
+    }
 
-	// 初始化VP（视频处理）模块
-	vpConf.u32MaxPoolCnt = 32;
-	HB_VP_SetConfig(&vpConf);
-	s32Ret = HB_VP_Init();
-	fprintf(stderr, "[init_decode] HB_VP_Init s32Ret = %d !\n", s32Ret);
+    frame_cir_buff_init(&g_frame_cir_buff);
+    g_eos = 0;
+    g_count = 0;
+    g_bufSize = 0;
+    g_mmz_index = 0;
+    memset(&g_pstStream, 0, sizeof(VIDEO_STREAM_S));
 
-	frame_cir_buff_init(&g_frame_cir_buff);
-	g_eos = 0;
-	g_count = 0;
-	g_bufSize = 0;
-	g_mmz_index = 0;
-	memset(&g_pstStream, 0, sizeof(VIDEO_STREAM_S));
+    // 初始化vps
+    vps_small_init();
+    
+    // 初始化模型文件
+    g_bpu_handle = sp_init_bpu_module(MODEL_FILE);
+    fprintf(stderr, "[init_decode] sp_init_bpu_module g_bpu_handle = %p\n", g_bpu_handle);    
 
-	// 初始化vps
-	vps_small_init();
-	// 初始化模型文件
-	g_bpu_handle = sp_init_bpu_module(MODEL_FILE);
-	fprintf(stderr, "[init_decode] sp_init_bpu_module g_bpu_handle = %p\n", g_bpu_handle);    
+    // 启动推理线程
+    std::thread t1(fcos_feed_bpu);
+    std::thread t2(fcos_do_post);
 
-	// 启动从VPS获取缩放后的图像并BPU进行推理的线程
-	std::thread t1(fcos_feed_bpu);
-	// 启动获取推理结果推送给流媒体服务器的线程
-	std::thread t2(fcos_do_post);
+    // 等待线程结束
+    t1.join();
+    t2.join();
 
-	// 只等待BPU相关线程结束，跳过解码器线程
-	fprintf(stderr, "[init_decode] before t1.join, t2.join ... ...\n");
-	t1.join();
-	t2.join();
+    sp_release_bpu_module(g_bpu_handle);
+    fprintf(stderr, "[init_decode] after sp_release_bpu_module\n");
 
-	sp_release_bpu_module(g_bpu_handle);
-	fprintf(stderr, "[init_decode] after sp_release_bpu_module\n");
-
-	s32Ret = HB_VP_Exit();
-	fprintf(stderr, "[init_decode] HB_VP_Exit: s32Ret = %d. Done !\n", s32Ret);
-
-	return 0;
+    return 0;
 }
 // 频帧解码并进行推理的执行线程
 void *bpu_and_push(void *arg)
