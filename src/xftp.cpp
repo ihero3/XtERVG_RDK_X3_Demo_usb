@@ -134,6 +134,7 @@ char g_stream_name[256] = {0};
 char g_web_server[32] = {0};
 uint16_t g_web_port = 0;
 uint8_t xftp_frame_buffer[1024*1024] = {0};
+int g_vps_group_number = 0;
 
 bpu_module *g_bpu_handle = NULL;
 hb_vio_buffer_t g_feedback_buf;
@@ -508,15 +509,15 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 
 // ============================ VPS处理函数 ============================
 // 初始化 VPS - 基于官方示例修改
-void vps_small_init(void) {
+void vps_small_init(int group_number) {
     VPS_GRP_ATTR_S grp_attr;
     VPS_CHN_ATTR_S chn_attr;
     int ret;
-    
-    // 1. 清理可能的残留资源
-    HB_VPS_DisableChn(0, 3);
-    HB_VPS_StopGrp(0);
-    HB_VPS_DestroyGrp(0);
+
+	// 1. 清理可能的残留资源
+    HB_VPS_DisableChn(group_number, 3);
+    HB_VPS_StopGrp(group_number);
+    HB_VPS_DestroyGrp(group_number);
     usleep(100000);
     
     // 2. 创建VPS组
@@ -525,17 +526,17 @@ void vps_small_init(void) {
     grp_attr.maxH = g_v_height;
     grp_attr.frameDepth = 8;
     
-    ret = HB_VPS_CreateGrp(0, &grp_attr);
+    ret = HB_VPS_CreateGrp(group_number, &grp_attr);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_CreateGrp failed, ret=%d\n", ret);
         return;
     }
     
     // 3. 设置为离线模式
-    ret = HB_SYS_SetVINVPSMode(0, VIN_OFFLINE_VPS_OFFINE);
+    ret = HB_SYS_SetVINVPSMode(group_number, VIN_OFFLINE_VPS_OFFINE);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_SYS_SetVINVPSMode failed, ret=%d\n", ret);
-        HB_VPS_DestroyGrp(0);
+        HB_VPS_DestroyGrp(group_number);
         return;
     }
     
@@ -548,31 +549,31 @@ void vps_small_init(void) {
     chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
     // 5. 设置通道属性
-    ret = HB_VPS_SetChnAttr(0, 3, &chn_attr);
+    ret = HB_VPS_SetChnAttr(group_number, 3, &chn_attr);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_SetChnAttr failed, ret=%d\n", ret);
-        HB_VPS_DestroyGrp(0);
+        HB_VPS_DestroyGrp(group_number);
         return;
     }
     
     // 6. 启用通道
-    ret = HB_VPS_EnableChn(0, 3);
+    ret = HB_VPS_EnableChn(group_number, 3);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_EnableChn failed, ret=%d\n", ret);
-        HB_VPS_DestroyGrp(0);
+        HB_VPS_DestroyGrp(group_number);
         return;
     }
     
     // 7. 启动VPS组
-    ret = HB_VPS_StartGrp(0);
+    ret = HB_VPS_StartGrp(group_number);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_StartGrp failed, ret=%d\n", ret);
-        HB_VPS_DisableChn(0, 3);
-        HB_VPS_DestroyGrp(0);
+        HB_VPS_DisableChn(group_number, 3);
+        HB_VPS_DestroyGrp(group_number);
         return;
     }
     
-    fprintf(stderr, "[vps_small_init] VPS group 0, channel 3 initialized successfully\n");
+    fprintf(stderr, "[vps_small_init] VPS group %d, channel 3 initialized successfully\n", group_number);
 }
 
 // 释放 VPS
@@ -959,7 +960,7 @@ void *uvc_thread_func(void *arg) {
 
     // ============ 初始化VPS和VENC ============
     // 1. 先初始化VPS  ihero
-    //vps_small_init();
+    vps_small_init(g_vps_group_number);
     
     // 2. 再初始化视频编码器
     ret = init_venc(g_v_width, g_v_height);
