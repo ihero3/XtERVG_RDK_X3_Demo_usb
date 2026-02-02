@@ -483,15 +483,15 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 }
 
 // UVC线程函数
-static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride)
+static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height)
 {
 	uint8_t *y = dst;
 	uint8_t *uv = dst + width * height;
 	for (int j = 0; j < height; j += 2) {
 		for (int i = 0; i < width; i += 2) {
-			int idx00 = j * src_stride + i * 2;
+			int idx00 = (j * width + i) * 2;
 			int idx01 = idx00 + 2;
-			int idx10 = (j + 1) * src_stride + i * 2;
+			int idx10 = idx00 + width * 2;
 			int idx11 = idx10 + 2;
 
 			uint8_t y00 = src[idx00];
@@ -579,8 +579,7 @@ void *uvc_thread_func(void *arg)
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	fmt.fmt.pix.width = g_v_width;
 	fmt.fmt.pix.height = g_v_height;
-	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
-	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
 	fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
 	if (ioctl(uvc_fd, VIDIOC_S_FMT, &fmt) < 0) {
