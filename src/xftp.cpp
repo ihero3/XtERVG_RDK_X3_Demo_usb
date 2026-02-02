@@ -509,13 +509,16 @@ int yuv_to_h264_nv12(uint8_t *y_ptr, uint8_t *uv_ptr, uint8_t **h264_data,
 
 // ============================ VPS处理函数 ============================
 // 初始化 VPS - 基于官方示例修改
-void vps_small_init(int group_number) {
+void vps_small_init(int group_number) 
+{
     VPS_GRP_ATTR_S grp_attr;
     VPS_CHN_ATTR_S chn_attr;
     int ret;
 
 	// 1. 清理可能的残留资源
+    HB_VPS_DisableChn(group_number, 1);
     HB_VPS_DisableChn(group_number, 3);
+    HB_VPS_DisableChn(group_number, 5);
     HB_VPS_StopGrp(group_number);
     HB_VPS_DestroyGrp(group_number);
     usleep(100000);
@@ -549,7 +552,7 @@ void vps_small_init(int group_number) {
     chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
     // 5. 设置通道属性
-    ret = HB_VPS_SetChnAttr(group_number, 3, &chn_attr);
+    ret = HB_VPS_SetChnAttr(group_number, 1, &chn_attr);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_SetChnAttr failed, ret=%d\n", ret);
         HB_VPS_DestroyGrp(group_number);
@@ -557,7 +560,7 @@ void vps_small_init(int group_number) {
     }
     
     // 6. 启用通道
-    ret = HB_VPS_EnableChn(group_number, 3);
+    ret = HB_VPS_EnableChn(group_number, 1);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_EnableChn failed, ret=%d\n", ret);
         HB_VPS_DestroyGrp(group_number);
@@ -568,13 +571,51 @@ void vps_small_init(int group_number) {
     ret = HB_VPS_StartGrp(group_number);
     if (ret != 0) {
         fprintf(stderr, "[vps_small_init] HB_VPS_StartGrp failed, ret=%d\n", ret);
-        HB_VPS_DisableChn(group_number, 3);
+        HB_VPS_DisableChn(group_number, 1);
         HB_VPS_DestroyGrp(group_number);
         return;
     }
     
     fprintf(stderr, "[vps_small_init] VPS group %d, channel 3 initialized successfully\n", group_number);
 }
+
+// VPS状态检查函数
+void check_vps_status(int group_number) 
+{
+    int ret;
+    VPS_GRP_ATTR_S grp_attr;
+    VPS_CHN_ATTR_S chn_attr;
+    
+    fprintf(stderr, "[check_vps_status] Checking VPS status...\n");
+    
+    // 检查组属性
+    ret = HB_VPS_GetGrpAttr(group_number, &grp_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Group 0 exists: maxW=%d, maxH=%d, frameDepth=%d\n",
+                grp_attr.maxW, grp_attr.maxH, grp_attr.frameDepth);
+    } else {
+        fprintf(stderr, "[check_vps_status] Group 0 does not exist or error: %d\n", ret);
+    }
+    
+    // 检查通道属性（通道3）
+    ret = HB_VPS_GetChnAttr(group_number, 3, &chn_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Channel 3 exists: width=%d, height=%d, enScale=%d\n",
+                chn_attr.width, chn_attr.height, chn_attr.enScale);
+    } else {
+        fprintf(stderr, "[check_vps_status] Channel 3 does not exist or error: %d\n", ret);
+    }
+    
+    // 检查通道属性（通道1）
+    ret = HB_VPS_GetChnAttr(group_number, 1, &chn_attr);
+    if (ret == 0) {
+        fprintf(stderr, "[check_vps_status] Channel 1 exists: width=%d, height=%d, enScale=%d\n",
+                chn_attr.width, chn_attr.height, chn_attr.enScale);
+    } else {
+        fprintf(stderr, "[check_vps_status] Channel 1 does not exist or error: %d\n", ret);
+    }
+}
+
 
 // 释放 VPS
 void vps_small_release(hb_vio_buffer_t* chn_3_out_buf) {
