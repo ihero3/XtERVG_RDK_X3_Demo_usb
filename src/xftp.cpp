@@ -1003,6 +1003,9 @@ void *uvc_thread_func(void *arg) {
     // 1. 先初始化VPS  ihero
     vps_small_init(g_vps_group_number);
     
+    // 检查VPS是否初始化成功
+    check_vps_status();
+	
     // 2. 再初始化视频编码器
     ret = init_venc(g_v_width, g_v_height);
     if (ret != 0) {
