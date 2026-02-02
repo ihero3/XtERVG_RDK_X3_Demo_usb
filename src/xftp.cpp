@@ -589,7 +589,7 @@ void vps_small_init(int group_number)
     chn_attr.width = 512;
     chn_attr.height = 512;
     chn_attr.frameDepth = 8;
-    chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
+    // chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
 	check_vps_status(group_number);
     // 5. 设置通道属性
