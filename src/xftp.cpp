@@ -859,7 +859,7 @@ void vps_small_init(void)
     grp_attr.maxW = g_v_width;
     grp_attr.maxH = g_v_height;
     grp_attr.frameDepth = 8;
-    grp_attr.enPixelFormat = PIXEL_FORMAT_NV12;
+    // 删除错误的enPixelFormat成员
     
     ret = HB_VPS_CreateGrp(0, &grp_attr);
     if (ret != 0) {
@@ -881,7 +881,7 @@ void vps_small_init(void)
     chn_3_attr.width = 512; // 输出宽度
     chn_3_attr.height = 512; // 输出高度
     chn_3_attr.frameDepth = 8; // 帧深度
-    chn_3_attr.enPixelFormat = PIXEL_FORMAT_NV12; // 输出格式
+    chn_3_attr.pixelFormat = HB_PIXEL_FORMAT_NV12; // 输出格式，使用正确的成员名和常量
     
     // 先设置通道属性
     ret = HB_VPS_SetChnAttr(0, 3, &chn_3_attr);
@@ -910,7 +910,6 @@ void vps_small_init(void)
 
     fprintf(stderr, "[vps_small_init] VPS group 0, channel 3 initialized successfully\n");
 }
-
 // 释放 vps
 void vps_small_release(hb_vio_buffer_t* chn_3_out_buf)
 {
