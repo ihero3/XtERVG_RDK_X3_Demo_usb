@@ -586,10 +586,12 @@ void vps_small_init(int group_number)
     // 4. 配置通道属性
     memset(&chn_attr, 0, sizeof(VPS_CHN_ATTR_S));
     chn_attr.enScale = 1;
-    chn_attr.width = 512;
-    chn_attr.height = 512;
+    // chn_attr.width = 512;
+    // chn_attr.height = 512;
+    chn_attr.width = 480;
+    chn_attr.height = 480;
     chn_attr.frameDepth = 8;
-    // chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
+    chn_attr.pixelFormat = HB_PIXEL_FORMAT_NV12;
     
 	check_vps_status(group_number);
     // 5. 设置通道属性
