@@ -958,8 +958,8 @@ void *uvc_thread_func(void *arg) {
     }
 
     // ============ 初始化VPS和VENC ============
-    // 1. 先初始化VPS
-    vps_small_init();
+    // 1. 先初始化VPS  ihero
+    //vps_small_init();
     
     // 2. 再初始化视频编码器
     ret = init_venc(g_v_width, g_v_height);
