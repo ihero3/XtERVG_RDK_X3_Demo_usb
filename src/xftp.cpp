@@ -519,25 +519,6 @@ static void yuyv_to_nv12(const uint8_t *src, uint8_t *dst, int width, int height
 	}
 }
 
-void add_to_yuv_file(uint8_t *y_ptr, uint8_t *uv_ptr, int width, int height)
-{
-	static FILE *yuv_fp = NULL;
-	if (!yuv_fp) {
-		yuv_fp = fopen("/tmp/uvc_output.yuv", "wb");
-		if (!yuv_fp) {
-			fprintf(stderr, "[add_to_yuv_file] Failed to open output YUV file: %s\n", strerror(errno));
-			return;
-		}
-	}
-
-	size_t y_size = width * height;
-	size_t uv_size = width * height / 2;
-
-	fwrite(y_ptr, 1, y_size, yuv_fp);
-	fwrite(uv_ptr, 1, uv_size, yuv_fp);
-	fflush(yuv_fp);
-}
-
 void *uvc_thread_func(void *arg)
 {
 	int ret;
@@ -561,11 +542,6 @@ void *uvc_thread_func(void *arg)
 	unsigned int n_buffers = 0;
 	int actual_pixfmt = V4L2_PIX_FMT_NV12;
 
-	//本地 H264 文件
-	FILE *h264_fp = fopen("/tmp/uvc_output.h264", "wb");
-	if (!h264_fp) {
-		fprintf(stderr, "[uvc_thread_func] Failed to open output file: %s\n", strerror(errno));
-	}
 
 	// 打开UVC设备
 	uvc_fd = open("/dev/video8", O_RDWR | O_NONBLOCK);
@@ -729,49 +705,6 @@ void *uvc_thread_func(void *arg)
 		if (actual_pixfmt == V4L2_PIX_FMT_NV12) {
 			y_ptr = (uint8_t *)buffers[buf.index].start;
 			uv_ptr = y_ptr + g_v_width * g_v_height;
-			add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);
-
-		} else if (actual_pixfmt == V4L2_PIX_FMT_YUYV) {
-			// 转换为 NV12：优先使用地平线 hb_mm 的硬件/优化接口，若不可用则回退到软件转换
-			nv12_tmp = (uint8_t *)malloc(g_v_width * g_v_height * 3 / 2);
-			if (!nv12_tmp) {
-				fprintf(stderr, "[uvc_thread_func] nv12_tmp malloc failed\n");
-				// 放回缓冲区
-				if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-					fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-					break;
-				}
-				continue;
-			}
-
-			int conv_ret = -1;
-			// try to resolve hb_mm_pixel_format_convert at runtime
-			typedef int (*hb_mm_conv_t)(void *dst, int dst_fmt, const void *src, int src_fmt, int width, int height);
-			hb_mm_conv_t hb_mm_conv = (hb_mm_conv_t)dlsym(RTLD_DEFAULT, "hb_mm_pixel_format_convert");
-			if (hb_mm_conv) {
-				conv_ret = hb_mm_conv(nv12_tmp, HB_PIXEL_FORMAT_NV12, buffers[buf.index].start, HB_PIXEL_FORMAT_YUYV422, g_v_width, g_v_height);
-				if (conv_ret != 0) {
-					fprintf(stderr, "[uvc_thread_func] hb_mm_pixel_format_convert failed ret=%d\n", conv_ret);
-				}
-			} else {
-				// fallback: software conversion
-				yuyv_to_nv12((const uint8_t *)buffers[buf.index].start, nv12_tmp, g_v_width, g_v_height);
-				conv_ret = 0;
-			}
-
-			if (conv_ret != 0) {
-				free(nv12_tmp);
-				// 放回缓冲区
-				if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
-					fprintf(stderr, "[uvc_thread_func] Failed to queue buffer: %s\n", strerror(errno));
-					break;
-				}
-				continue;
-			}
-
-			y_ptr = nv12_tmp;
-			uv_ptr = nv12_tmp + g_v_width * g_v_height;
-			// add_to_yuv_file(y_ptr, uv_ptr, g_v_width, g_v_height);	
 		} else {
 			fprintf(stderr, "[uvc_thread_func] Unsupported pixel format: 0x%x\n", actual_pixfmt);
 			if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
@@ -796,12 +729,7 @@ void *uvc_thread_func(void *arg)
 		// 处理编码后的H264数据（写入文件并推送）
 		timestamp = getTimeMsec() - g_start_vts;
 		if (h264_data && h264_len > 0) {
-			// 写入本地文件用于验证
-			if (h264_fp) {
-				fwrite(h264_data, 1, h264_len, h264_fp);
-				fflush(h264_fp);
-			}
-
+			
 			memcpy(&xftp_frame_buffer[4], h264_data, h264_len);
 			// 送到解码器解码，VPS压缩，BPU进行推理  ihero
 			// ret = send_stream_to_bpu(xftp_frame_buffer, h264_len + 4);
@@ -858,8 +786,6 @@ exit:
 
 	// 停止编码器
 	deinit_venc();
-
-	if (h264_fp) fclose(h264_fp);
 
 	video_session_did_stop_cb();
 
