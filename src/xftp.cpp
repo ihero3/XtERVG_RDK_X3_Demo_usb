@@ -122,6 +122,7 @@ char g_rtsp_pwd[128] = {0};
 char g_rtsp_server_ip[512] = {0};
 uint16_t g_rtsp_port = 0;
 uint16_t g_v_width = 1920, g_v_height = 1080;
+char g_v_channel[128] = {0};
 uint16_t g_download_port = 0;
 uint16_t g_remote_server_port = 0;
 uint32_t g_uidn = 0, g_ssrc = 0;
@@ -903,9 +904,9 @@ void *uvc_thread_func(void *arg) {
     int actual_pixfmt = V4L2_PIX_FMT_NV12;
 
     // 打开UVC设备
-    uvc_fd = open("/dev/video8", O_RDWR | O_NONBLOCK);
+    uvc_fd = open(g_v_channel, O_RDWR | O_NONBLOCK);
     if (uvc_fd < 0) {
-        fprintf(stderr, "[uvc_thread_func] Failed to open /dev/video8: %s\n", strerror(errno));
+        fprintf(stderr, "[uvc_thread_func] Failed to open %s: %s\n", g_v_channel, strerror(errno));
         goto exit;
     }
 
@@ -1886,14 +1887,14 @@ void IntHandle(int signo) {
 int main(int argc, char *argv[]) {
     int rt, i = 3;
 
-    if (argc != 4) {
+    if (argc != 5) {
         fprintf(stderr, "USAGE: %s channel_no video_width video_height\n", argv[0]);
         return -1;
     }
     
     g_v_width = atoi(argv[2]);
     g_v_height = atoi(argv[3]);
-    
+    strcpy(g_v_channel, argv[4]);
     if (strlen(argv[1]) != 3 || g_v_width <= 0 || g_v_height <= 0) {
         fprintf(stderr, "USAGE: %s channel_no video_width video_height\n", argv[0]);
         return -2;
