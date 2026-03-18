@@ -7,6 +7,7 @@
 #include <argp.h>
 #include <math.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 
@@ -1540,13 +1541,15 @@ int read_config_xtvf(const char *channel_no)
 			return -7;
 		}
 	} else if (!strcmp(g_stream_protocol, "uvc")) {
-		// UVC流地址直接作为设备路径
-		if (strlen(g_stream_url) >= sizeof(g_v_channel)) {
-			fprintf(stderr, "[read_config_xtvf] g_stream_url too long for g_v_channel\n");
-			return -8;
+		// UVC流地址可从数据库获取，也可从命令行覆盖。
+		if (strlen(g_v_channel) == 0) {
+			if (strlen(g_stream_url) >= sizeof(g_v_channel)) {
+				fprintf(stderr, "[read_config_xtvf] g_stream_url too long for g_v_channel\n");
+				return -8;
+			}
+			strncpy(g_v_channel, g_stream_url, sizeof(g_v_channel)-1);
+			g_v_channel[sizeof(g_v_channel)-1] = '\0';
 		}
-		strncpy(g_v_channel, g_stream_url, sizeof(g_v_channel)-1);
-		g_v_channel[sizeof(g_v_channel)-1] = '\0';
 		fprintf(stderr, "[read_config_xtvf] UVC protocol selected, device=%s\n", g_v_channel);
 	} else {
 		fprintf(stderr, "[read_config_xtvf] No the protocol = %s", g_stream_protocol);
@@ -1582,14 +1585,17 @@ int main(int argc, char *argv[])
 {
 	int rt, i = 3;
 
-	if (argc != 4) {
-		fprintf(stderr, "USAGE: %s channel_no video_width video_height\n", argv[0]);
+	if (argc != 5) {
+		fprintf(stderr, "USAGE: %s channel_no video_width video_height uvc_channel\n", argv[0]);
 		return -1;
 	}
 	g_v_width = atoi(argv[2]); // 视频帧宽度
 	g_v_height = atoi(argv[3]); // 视频帧高度
-	if (strlen(argv[1]) != 3 || g_v_width <= 0  || g_v_height <= 0) {
-		fprintf(stderr, "USAGE: %s channel_no video_width video_height\n", argv[0]);
+	strncpy(g_v_channel, argv[4], sizeof(g_v_channel) - 1);
+	g_v_channel[sizeof(g_v_channel) - 1] = '\0';
+
+	if (strlen(argv[1]) != 3 || g_v_width <= 0 || g_v_height <= 0) {
+		fprintf(stderr, "USAGE: %s channel_no video_width video_height uvc_channel\n", argv[0]);
 		return -2;
 	}
 	// 验证应用ID
