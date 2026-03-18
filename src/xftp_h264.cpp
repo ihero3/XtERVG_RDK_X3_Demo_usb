@@ -77,17 +77,16 @@ using namespace std;
 #define ONE_MILLION_BASE 1000000
 
 // 应用KEY
-#define APP_KEY ""
+#define APP_KEY "x697889e34984d"
 // 应用SECRET
-#define APP_SECRET ""
+#define APP_SECRET "c390a16a191070df91b38620d2381531"
 // 应用LICENSE
-#define LICENSE_KEY ""
+#define LICENSE_KEY "3d86aeed470c944c84c282b70ea71500"
 
 #define MODEL_FILE "/usr/local/xt/models/fcos_512x512_nv12.bin"
 
 #define WEB_AGENT "19188888888"
 #define SRS_AGENT "19199999999"
-
 typedef struct {
 	hbDNNTensor *payload;
 	std::chrono::system_clock::time_point start_time;
