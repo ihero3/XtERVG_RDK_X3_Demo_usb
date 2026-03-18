@@ -7,9 +7,11 @@ EXE_FLAGS = $(CXX_FLAGS) -o
 CMP_FLAGS += -DUSE_HB
 
 XFTP = xftp
+XFTP_H264 = xftp_h264
 MONITOR = monitor
-EXECS = $(XFTP) $(MONITOR) 
+EXECS = $(XFTP) $(XFTP_H264) $(MONITOR) 
 XFTP_OBJS = xftp.o string_split.o sqlite.o http.o thread.o sps_parser.o frame_cir_buff.o annotation_info.o fcos_post_process.o
+XFTP_H264_OBJS = xftp_h264.o string_split.o sqlite.o http.o thread.o sps_parser.o frame_cir_buff.o annotation_info.o fcos_post_process.o
 MONITOR_OBJS = monitor.o config_file.o string_split.o sqlite.o http.o 
 
 LIB_PATH := ../libs /usr/local/xt/lib
@@ -27,9 +29,12 @@ INSTALL_DIR = /usr/local/xt/bin
 
 .PHONY: all clean
 
-all: $(XFTP) $(MONITOR)
+all: $(XFTP) $(XFTP_H264) $(MONITOR)
 
 $(XFTP): $(XFTP_OBJS)
+	$(CXX) $(EXE_FLAGS) $@ $^ $(LIBS)
+
+$(XFTP_H264): $(XFTP_H264_OBJS)
 	$(CXX) $(EXE_FLAGS) $@ $^ $(LIBS)
 
 $(MONITOR): $(MONITOR_OBJS)
