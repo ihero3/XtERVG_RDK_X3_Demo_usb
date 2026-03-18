@@ -910,7 +910,24 @@ void *uvc_h264_thread_func(void *arg)
 		}
 
 		if (buf.bytesused > 0 && buf.index < n_buffers) {
-			video_session_did_received_cb(XTVF_VIDEO_TYPE, (uint8_t *)buffers[buf.index].start, buf.bytesused);
+			uint8_t *data = (uint8_t *)buffers[buf.index].start;
+			int size = buf.bytesused;
+			int offset = 0;
+
+			if (size >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01) {
+				offset = 4;
+			} else if (size >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01) {
+				offset = 3;
+			}
+
+			if (offset > 0) {
+				data += offset;
+				size -= offset;
+			}
+
+			if (size > 0) {
+				video_session_did_received_cb(XTVF_VIDEO_TYPE, data, size);
+			}
 		}
 
 		if (ioctl(uvc_fd, VIDIOC_QBUF, &buf) < 0) {
