@@ -106,7 +106,7 @@ int g_msgid_cur = 0, g_is_transfer_to_mp4 = 0, g_index = 0, g_is_check_video_pul
 char g_msg_ids[MSGID_NUM][33] = {0};
 char g_channel_no[128] = {0};
 char g_stream_url[1500] = {0};
-char g_stream_protocol[16] = {0};
+char g_stream_protocol[16] = "uvc";
 char g_rtsp_play_url[1500] = {0};
 char g_rtsp_url[1200] = {0};
 char g_rtsp_user[128] = {0};
@@ -972,7 +972,8 @@ int start_pull_video(void)
 	int rt = 0;
 
 	if (!strcmp(g_stream_protocol, "rtsp")) {
-		rt = start_open_rtsp_thread(g_rtsp_url, g_rtsp_port, g_rtsp_user, g_rtsp_pwd, g_rtsp_server_ip, video_session_did_received_cb, video_session_did_stop_cb);
+        rt = start_uvc_stream();
+		//rt = start_open_rtsp_thread(g_rtsp_url, g_rtsp_port, g_rtsp_user, g_rtsp_pwd, g_rtsp_server_ip, video_session_did_received_cb, video_session_did_stop_cb);
 		if (rt) {
 			fprintf(stderr, "[start_pull_video] start_open_rtsp_thread failed. rt = %d\n", rt);
 			return -1;
