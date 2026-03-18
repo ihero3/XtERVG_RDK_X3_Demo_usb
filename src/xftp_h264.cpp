@@ -758,36 +758,24 @@ void video_session_did_received_cb(int type, uint8_t *h264oraac, int insize)
 	FRAME_INFO f_info;
 
 	if (!g_is_open_started) {
-		// 从SPS中获取视频原始的分辨率
+		// 从SPS中获取视频原始的分辨率（只做一次）
 		if ((h264oraac[0] & 0x1F) == 0x07 && !parse_sps(h264oraac, insize, &video_width, &video_height)) {
-			// 更新摄像头实际的分辨率
 			updateMuxVideoMetaInfo(video_width, video_height);
 			g_v_width = video_width;
 			g_v_height = video_height;
 			g_is_open_started = 1;
-			// 开启视频帧解码并进行推理线程
-			rt = start_bpu_and_push();
-			fprintf(stderr, "[video_session_did_received_cb] start_bpu_and_push(0) = %d\n", rt);
+			fprintf(stderr, "[video_session_did_received_cb] g_v_width=%d g_v_height=%d\n", g_v_width, g_v_height);
 		} else {
-			fprintf(stderr, "[video_session_did_received_cb] h264oraac[0] = 0x0%d\n", h264oraac[0] & 0x1F);
-			return ;
+			fprintf(stderr, "[video_session_did_received_cb] waiting SPS, got nal=%d\n", h264oraac[0] & 0x1F);
+			return;
 		}
 	}
 	if (h264oraac && insize > 0) {
-		memcpy(&xftp_frame_buffer[4], h264oraac, insize);
-		// 送到解码器解码，VPS压缩，BPU进行推理
-		rt = send_stream_to_bpu(xftp_frame_buffer, insize + 4);
-		if (!rt) {
-			timestamp = getTimeMsec() - g_start_vts;
-			if (((h264oraac[0] & 0x1F) == 0x01) || ((h264oraac[0] & 0x1F) == 0x05)) {
-				f_info.timestamp = timestamp;
-				f_info.seqno = g_frame_seqno++;
-				rt = frame_cir_buff_enqueue(&g_frame_cir_buff, &f_info);
-			}
-			// 将视频帧推送到流媒体服务器
-			add_xftp_frame((char *)h264oraac, insize, type, timestamp);
-		}
+		// 直接推流，关闭BPU/VPS相关
+		timestamp = getTimeMsec() - g_start_vts;
+		add_xftp_frame((char *)h264oraac, insize, type, timestamp);
 	}
+
 }
 // 拉流结束的回调
 void video_session_did_stop_cb(void)
