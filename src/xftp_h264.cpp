@@ -1615,6 +1615,12 @@ int main(int argc, char *argv[])
 	if (rt) {
 		fprintf(stderr, "[%s] read_config_xtvf failed, rt = %d\n", argv[0], rt);
 	}
+
+	// 主动强制走 UVC 模式（g_v_channel 从 argv 传过来时优先）
+	if (strlen(g_v_channel) > 0) {
+		strcpy(g_stream_protocol, "uvc");
+		fprintf(stderr, "[main] Force stream protocol to uvc, device=%s\n", g_v_channel);
+	}
 	// 登录信令服务器
 	// 登录成功会回调 myRegisterSuccessCallback
 	// 登录失败会回调 myRegisterFailedCallback
